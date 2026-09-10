@@ -5,7 +5,7 @@ import { randomUUID,createHash } from 'node:crypto';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { apiError,assetJson,projectJson } from './store.js';
-import { assetMetadataSchema } from './schemas.js';
+import { assetMetadataSchema,assetPatchSchema } from './schemas.js';
 import { audit,transaction } from './db.js';
 
 export function parseRange(header,size) {
@@ -20,8 +20,12 @@ export function parseRange(header,size) {
 }
 
 function safeFilename(value) {
-  const filename=path.posix.basename(String(value||'').replace(/\\/g,'/')).normalize('NFC').replace(/[\u0000-\u001f\u007f]/g,'').trim();
-  if(!filename||filename==='.'||filename==='..'||filename.length>180)throw apiError(400,'INVALID_FILENAME','文件名称为空或超过 180 个字符');
+  if(typeof value!=='string'||!value.trim())throw apiError(400,'INVALID_FILENAME','请填写文件名称');
+  const filename=value.normalize('NFC');
+  if(Array.from(filename).length>180)throw apiError(400,'INVALID_FILENAME','文件名称不能超过 180 个字符');
+  if(!filename.isWellFormed()||/[<>:"/\\|?*\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(filename))throw apiError(400,'INVALID_FILENAME','文件名称不能包含路径、控制字符或 <>:"/\\|?*');
+  if(filename!==filename.trim()||filename.endsWith('.'))throw apiError(400,'INVALID_FILENAME','文件名称不能以空白开头或结尾，也不能以句点结尾');
+  if(/^(?:con|prn|aux|nul|conin\$|conout\$|clock\$|com[1-9¹²³]|lpt[1-9¹²³])$/i.test(filename.split('.')[0].trimEnd()))throw apiError(400,'INVALID_FILENAME','请使用非 Windows 保留名称，例如 setup.zip');
   return filename;
 }
 
@@ -65,6 +69,9 @@ export async function registerFiles(app,db,config) {
     if(row.status!=='draft')throw apiError(409,'RELEASE_IMMUTABLE','只有草稿版本可以修改安装包');
     return row;
   }
+  function availableFilename(releaseId,filename,exceptId='') {
+    if(db.prepare('SELECT 1 FROM assets WHERE release_id=? AND filename=? AND id<>?').get(releaseId,filename,exceptId))throw apiError(409,'ASSET_FILENAME_CONFLICT','这个版本中已有同名安装包，请使用不同的文件名称');
+  }
   app.post('/api/admin/releases/:id/assets',{schema:{querystring:assetMetadataSchema}},async(request,reply)=>{
     draft(request.params.id);
     if(db.prepare('SELECT COUNT(*) AS n FROM assets WHERE release_id=?').get(request.params.id).n>=64)throw apiError(400,'ASSET_LIMIT','一个版本最多包含 64 个附件');
@@ -74,6 +81,7 @@ export async function registerFiles(app,db,config) {
       transaction(db,()=>{
         draft(request.params.id);
         if(db.prepare('SELECT COUNT(*) AS n FROM assets WHERE release_id=?').get(request.params.id).n>=64)throw apiError(400,'ASSET_LIMIT','一个版本最多包含 64 个附件');
+        availableFilename(request.params.id,file.filename);
         // 文件完成落盘后才登记元数据，失败时外层负责移除孤立文件。
         fs.renameSync(file.temporary,finalPath);
         db.prepare('INSERT INTO assets(id,release_id,filename,storage_name,content_type,size,platform,arch,sha256,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(file.id,request.params.id,file.filename,file.id,file.contentType,file.size,request.query.platform,request.query.arch,file.sha256,new Date().toISOString());
@@ -83,13 +91,24 @@ export async function registerFiles(app,db,config) {
     }catch(error){await fsp.unlink(file.temporary).catch(()=>{});await fsp.unlink(finalPath).catch(()=>{});throw error;}
     reply.code(201);return {asset:assetJson(db.prepare('SELECT * FROM assets WHERE id=?').get(file.id))};
   });
-  app.patch('/api/admin/assets/:id',{schema:{body:assetMetadataSchema}},async request=>{
-    const asset=db.prepare('SELECT * FROM assets WHERE id=?').get(request.params.id);
-    if(!asset)throw apiError(404,'NOT_FOUND','文件不存在');
-    draft(asset.release_id);
-    db.prepare('UPDATE assets SET platform=?,arch=? WHERE id=?').run(request.body.platform,request.body.arch,asset.id);
-    audit(db,'asset.update',asset.id);
-    return {asset:assetJson(db.prepare('SELECT * FROM assets WHERE id=?').get(asset.id))};
+  app.patch('/api/admin/assets/:id',{schema:{body:assetPatchSchema}},async request=>{
+    const updated=transaction(db,()=>{
+      const asset=db.prepare('SELECT * FROM assets WHERE id=?').get(request.params.id);
+      if(!asset)throw apiError(404,'NOT_FOUND','文件不存在');
+      const filename=request.body.filename===undefined?asset.filename:safeFilename(request.body.filename);
+      const platform=request.body.platform??asset.platform,arch=request.body.arch??asset.arch;
+      const renamed=filename!==asset.filename,metadataChanged=platform!==asset.platform||arch!==asset.arch;
+      // 正式发布后仅允许修正下载名称，安装包内容和平台身份保持不变。
+      if(metadataChanged)draft(asset.release_id);
+      if(!renamed&&!metadataChanged)return asset;
+      availableFilename(asset.release_id,filename,asset.id);
+      db.prepare('UPDATE assets SET filename=?,platform=?,arch=? WHERE id=?').run(filename,platform,arch,asset.id);
+      db.prepare('UPDATE releases SET updated_at=? WHERE id=?').run(new Date().toISOString(),asset.release_id);
+      if(renamed)audit(db,'asset.rename',asset.id);
+      if(metadataChanged)audit(db,'asset.update',asset.id);
+      return db.prepare('SELECT * FROM assets WHERE id=?').get(asset.id);
+    });
+    return {asset:assetJson(updated)};
   });
   app.delete('/api/admin/assets/:id',async request=>{
     const asset=db.prepare('SELECT * FROM assets WHERE id=?').get(request.params.id);

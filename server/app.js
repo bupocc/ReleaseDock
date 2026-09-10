@@ -179,6 +179,11 @@ export async function buildApp(options={}) {
   await registerFiles(app,db,config);
   const webRoot=path.join(root,'web');
   if(fs.existsSync(webRoot)) {
+    // 仅公开浏览器需要的两个依赖入口，保持离线可用且不暴露整个依赖目录。
+    for(const [name,packageName] of [['marked.js','marked'],['purify.js','dompurify']]) {
+      const source=fileURLToPath(import.meta.resolve(packageName));
+      app.get(`/assets/vendor/${name}`,async(request,reply)=>reply.type('text/javascript; charset=utf-8').header('Cache-Control','public, max-age=0').send(fs.createReadStream(source)));
+    }
     await app.register(fastifyStatic,{root:webRoot,prefix:'/assets/',index:false,dotfiles:'deny',redirect:false,cacheControl:true,maxAge:0});
     app.get('/',async(request,reply)=>reply.type('text/html; charset=utf-8').send(fs.createReadStream(path.join(webRoot,'index.html'))));
   }

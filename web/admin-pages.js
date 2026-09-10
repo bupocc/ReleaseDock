@@ -1,6 +1,7 @@
 import { icon, logo, projectMark } from './icons.js';
 import { api, escapeHtml as e, formatBytes, formatDate, formatNumber, versionLabel, copyText } from './api.js';
 import { url, toast } from './app.js';
+import { assetRenameButton, openAssetRename } from './asset-rename.js';
 
 const labels = { overview: '概览', projects: '项目管理', releases: '版本管理', files: '文件管理', 'project-edit': '项目配置', publish: '版本发布', settings: '站点设置' };
 const navItems = [['overview', 'grid', '概览'], ['projects', 'box', '项目管理'], ['releases', 'layers', '版本管理'], ['files', 'folder', '文件管理']];
@@ -82,9 +83,13 @@ function releasesPage(params, data) {
   return `${pageHeading('版本管理', '整理每次更新，让发布过程清晰、有序。', `<a class="btn btn-primary" href="${url('publish', params.get('projectId') ? { project: params.get('projectId') } : '')}">${icon('plus', 15)}发布新版本</a>`)}<div class="release-summary"><div><span class="summary-square">${icon('layers', 20)}</span><strong class="mono">${published}</strong><span>已发布版本</span></div><div><span class="summary-square amber">${icon('edit', 20)}</span><strong class="mono">${drafts}</strong><span>待发布草稿</span></div><div><span class="summary-square">${icon('box', 20)}</span><strong class="mono">${withdrawn}</strong><span>已下架版本</span></div></div><section class="panel"><div class="admin-table-toolbar"><div class="table-tabs" role="group" aria-label="版本状态"><button class="active" data-table-filter="all" aria-pressed="true">全部版本</button><button data-table-filter="published" aria-pressed="false">已发布</button><button data-table-filter="draft" aria-pressed="false">草稿 <span class="draft-count mono">${drafts}</span></button><button data-table-filter="withdrawn" aria-pressed="false">已下架</button></div><div class="table-toolbar-controls"><select id="release-project-filter" class="table-select" aria-label="按项目筛选版本"><option value="">全部项目</option>${(data.projects || []).map((project) => `<option value="${e(project.id)}" ${params.get('projectId') === project.id ? 'selected' : ''}>${e(project.name)}</option>`).join('')}</select><label class="search-field">${icon('search', 15)}<input type="search" id="table-search" placeholder="搜索项目、版本号…" aria-label="搜索版本"></label></div></div>${releases.length ? releaseTable(releases, true, data.projects) : emptyState('还没有版本记录', '创建一个版本，添加更新说明和安装包，再正式发布。', `<a class="btn btn-primary" href="${url('publish', params.get('projectId') ? { project: params.get('projectId') } : '')}">${icon('plus', 15)}创建版本</a>`, 'layers')}<div class="table-empty" id="table-empty" hidden>没有匹配的版本，试试其他关键词或状态。</div>${pagination('版本', releases.length)}</section><div class="release-workflow"><span>一个版本的旅程</span><div><span>${icon('edit', 16)}保存草稿</span><i></i><span>${icon('upload', 16)}添加安装包</span><i></i><span>${icon('eye', 16)}检查内容</span><i></i><span>${icon('check', 16)}正式发布</span></div></div><dialog class="confirm-dialog" id="withdraw-dialog" aria-labelledby="withdraw-title"><span class="state-icon">${icon('layers', 25)}</span><h2 id="withdraw-title">下架这个版本？</h2><p><strong id="withdraw-name"></strong></p><p>下架后，访客将无法查看此版本或下载它的附件。版本记录和文件会保留在后台。</p><form id="withdraw-form"><p class="inline-error" id="withdraw-error" role="alert"></p><div class="dialog-actions"><button type="button" class="btn btn-light" id="withdraw-cancel">取消</button><button type="submit" class="btn btn-danger">确认下架</button></div></form></dialog>`;
 }
 
+function fileRow(file) {
+  return `<tr data-row data-asset-row="${e(file.id)}" data-state="${e(file.status)}" data-search="${e(`${file.filename} ${file.projectName} ${file.version}`)}"><td><div class="file-name-cell">${icon('file', 18)}<div class="file-name-details"><span class="mono" data-asset-filename title="${e(file.filename)}">${e(file.filename)}</span>${assetRenameButton(file, 'file-rename-action')}</div></div></td><td>${e(file.platform || '通用')}<span class="table-subline mono">${e(file.arch || '—')}</span></td><td class="mono">${formatBytes(file.size)}</td><td>${e(file.projectName)}<span class="table-subline mono">${e(versionLabel(file.version))}</span></td><td>${statusBadge(file.status)}</td><td class="align-right"><div class="release-row-actions">${file.sha256 ? `<button class="table-action" type="button" data-file-checksum="${e(file.sha256)}" aria-label="复制 ${e(file.filename)} 的校验值">SHA-256 ${icon('copy', 12)}</button>` : ''}<a class="table-action" href="${url('publish', { id: file.releaseId })}">所属版本 ${icon('arrow', 12)}</a></div></td></tr>`;
+}
+
 function filesPage(data) {
   const assets = data.assets || [];
-  return `${pageHeading('文件管理', '查看版本附件及其归属；安装包通过发布页面统一添加。', `<a class="btn btn-primary" href="${url('publish')}">${icon('upload', 15)}添加版本文件</a>`)}<div class="admin-summary-line"><span><strong class="mono">${assets.length}</strong> 个文件</span><span>合计 <strong class="mono">${formatBytes(assets.reduce((sum, file) => sum + (Number(file.size) || 0), 0))}</strong></span></div><section class="panel"><div class="admin-table-toolbar"><div class="table-tabs" role="group" aria-label="文件状态"><button class="active" data-table-filter="all" aria-pressed="true">全部文件</button><button data-table-filter="published" aria-pressed="false">已发布版本</button><button data-table-filter="draft" aria-pressed="false">草稿附件</button><button data-table-filter="withdrawn" aria-pressed="false">已下架版本</button></div><label class="search-field">${icon('search', 15)}<input type="search" id="table-search" placeholder="搜索文件、项目…" aria-label="搜索文件"></label></div>${assets.length ? `<div class="table-scroll"><table class="data-table files-table"><thead><tr><th scope="col">文件名称</th><th scope="col">平台 / 架构</th><th scope="col">大小</th><th scope="col">所属项目 / 版本</th><th scope="col">版本状态</th><th scope="col" class="align-right">操作</th></tr></thead><tbody>${assets.map((file) => `<tr data-row data-state="${e(file.status)}" data-search="${e(`${file.filename} ${file.projectName} ${file.version}`)}"><td><span class="file-name-cell">${icon('file', 18)}<span class="mono">${e(file.filename)}</span></span></td><td>${e(file.platform || '通用')}<span class="table-subline mono">${e(file.arch || '—')}</span></td><td class="mono">${formatBytes(file.size)}</td><td>${e(file.projectName)}<span class="table-subline mono">${e(versionLabel(file.version))}</span></td><td>${statusBadge(file.status)}</td><td class="align-right"><div class="release-row-actions">${file.sha256 ? `<button class="table-action" data-file-checksum="${e(file.sha256)}" aria-label="复制 ${e(file.filename)} 的校验值">SHA-256 ${icon('copy', 12)}</button>` : ''}<a class="table-action" href="${url('publish', { id: file.releaseId })}">所属版本 ${icon('arrow', 12)}</a></div></td></tr>`).join('')}</tbody></table></div>` : emptyState('还没有上传文件', '先创建版本草稿，再为它添加适合不同平台的安装包。', `<a class="btn btn-light" href="${url('publish')}">创建版本 ${icon('arrow', 14)}</a>`, 'folder')}<div class="table-empty" id="table-empty" hidden>没有匹配的文件。</div>${pagination('文件', assets.length)}</section><div class="admin-tip">${icon('info', 14)}<span>文件的公开状态跟随项目与版本。项目隐藏、版本草稿或下架后，附件都不会对访客开放。</span></div>`;
+  return `${pageHeading('文件管理', '查看版本附件及其归属，可直接调整显示和下载时使用的文件名。', `<a class="btn btn-primary" href="${url('publish')}">${icon('upload', 15)}添加版本文件</a>`)}<div class="admin-summary-line"><span><strong class="mono">${assets.length}</strong> 个文件</span><span>合计 <strong class="mono">${formatBytes(assets.reduce((sum, file) => sum + (Number(file.size) || 0), 0))}</strong></span></div><section class="panel"><div class="admin-table-toolbar"><div class="table-tabs" role="group" aria-label="文件状态"><button class="active" data-table-filter="all" aria-pressed="true">全部文件</button><button data-table-filter="published" aria-pressed="false">已发布版本</button><button data-table-filter="draft" aria-pressed="false">草稿附件</button><button data-table-filter="withdrawn" aria-pressed="false">已下架版本</button></div><label class="search-field">${icon('search', 15)}<input type="search" id="table-search" placeholder="搜索文件、项目…" aria-label="搜索文件"></label></div>${assets.length ? `<div class="table-scroll"><table class="data-table files-table"><thead><tr><th scope="col">文件名称</th><th scope="col">平台 / 架构</th><th scope="col">大小</th><th scope="col">所属项目 / 版本</th><th scope="col">版本状态</th><th scope="col" class="align-right">操作</th></tr></thead><tbody>${assets.map(fileRow).join('')}</tbody></table></div>` : emptyState('还没有上传文件', '先创建版本草稿，再为它添加适合不同平台的安装包。', `<a class="btn btn-light" href="${url('publish')}">创建版本 ${icon('arrow', 14)}</a>`, 'folder')}<div class="table-empty" id="table-empty" hidden>没有匹配的文件。</div>${pagination('文件', assets.length)}</section><div class="admin-tip">${icon('info', 14)}<span>文件的公开状态跟随项目与版本。项目隐藏、版本草稿或下架后，附件都不会对访客开放。</span></div>`;
 }
 
 function settingsPage(data) {
@@ -129,6 +134,7 @@ function bindTable(noun) {
   document.querySelector('#table-prev').addEventListener('click', () => { current--; update(); });
   document.querySelector('#table-next').addEventListener('click', () => { current++; update(); });
   update();
+  return update;
 }
 
 function bindShell() {
@@ -156,7 +162,7 @@ export async function bindAdmin(page, params, data) {
     const forms = await import('./admin-forms.js');
     await forms.bindAdminForm(page, params, data);
   }
-  if (['projects', 'releases', 'files'].includes(page)) bindTable({ projects: '项目', releases: '版本', files: '文件' }[page]);
+  const refreshTable = ['projects', 'releases', 'files'].includes(page) ? bindTable({ projects: '项目', releases: '版本', files: '文件' }[page]) : null;
   if (page === 'releases') {
     document.querySelector('#release-project-filter').addEventListener('change', (event) => location.assign(url('releases', event.target.value ? { projectId: event.target.value } : '')));
     const dialog = document.querySelector('#withdraw-dialog');
@@ -184,6 +190,28 @@ export async function bindAdmin(page, params, data) {
       finally { pending = false; form.querySelectorAll('button').forEach((button) => { button.disabled = false; }); submit.textContent = '确认下架'; }
     });
   }
+  if (page === 'files') document.querySelectorAll('[data-asset-rename]').forEach((button) => button.addEventListener('click', async () => {
+    const asset = (data.assets || []).find(item => item.id === button.dataset.assetRename);
+    const row = button.closest('[data-asset-row]');
+    if (!asset || !row) return;
+    try {
+      const renamed = await openAssetRename(asset, button);
+      if (!renamed) return;
+      const updated = { ...asset, ...renamed };
+      data.assets = data.assets.map(item => item.id === updated.id ? updated : item);
+      const filename = row.querySelector('[data-asset-filename]');
+      filename.textContent = updated.filename;
+      filename.title = updated.filename;
+      button.setAttribute('aria-label', `重命名 ${updated.filename}`);
+      button.title = `重命名 ${updated.filename}`;
+      row.querySelector('[data-file-checksum]')?.setAttribute('aria-label', `复制 ${updated.filename} 的校验值`);
+      row.dataset.search = `${updated.filename} ${updated.projectName || ''} ${updated.version || ''}`;
+      refreshTable();
+      toast('安装包已重命名。');
+      // 若旧文件名筛选使该行不再显示，回到搜索框继续操作。
+      (row.hidden ? document.querySelector('#table-search') : button)?.focus({ preventScroll: true });
+    } catch (error) { toast(error.message || '无法打开重命名窗口，请稍后重试。'); }
+  }));
   if (page === 'files') document.querySelectorAll('[data-file-checksum]').forEach((button) => button.addEventListener('click', async () => {
     try { await copyText(button.dataset.fileChecksum); toast('SHA-256 文件校验值已复制。'); }
     catch {

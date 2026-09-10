@@ -165,6 +165,172 @@ test('版本发布、管理鉴权与公开下载形成真实闭环',{timeout:550
   });
 });
 
+test('安装包改名保留文件身份、权限边界和持久化记录',{timeout:20000},async t=>{
+  const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'releasedock-test-rename-'));
+  let app;
+  t.after(async()=>{
+    await app?.close();
+    const target=path.resolve(dataDir),parent=path.resolve(os.tmpdir());
+    assert.ok(target.startsWith(parent+path.sep)&&path.basename(target).startsWith('releasedock-test-rename-'));
+    await fs.rm(target,{recursive:true,force:true});
+  });
+  const options={dataDir,adminKey:key,logger:false,loginRateLimit:100,maxUploadBytes:1024};
+  app=await buildApp(options);
+  const login=await app.inject({method:'POST',url:'/api/login',payload:{key}});
+  assert.equal(login.statusCode,200,login.body);
+  const headers={cookie:login.headers['set-cookie'].split(';')[0],'x-csrf-token':login.json().csrfToken};
+  const call=(method,url,payload,extraHeaders={})=>app.inject({method,url,payload,headers:{...headers,...extraHeaders}});
+  const project=(await call('POST','/api/admin/projects',{name:'文件改名测试',slug:'asset-rename'})).json().project;
+  const release=(await call('POST','/api/admin/releases',{projectId:project.id,version:'1.0.0',title:'安装包改名',notes:'验证下载名称与文件内容独立保存。',channel:'stable'})).json().release;
+  const bytes=Buffer.concat([Buffer.from('ReleaseDock rename package\0'),Buffer.from([255,128,13,10])]);
+  const sha256=createHash('sha256').update(bytes).digest('hex');
+  const upload=async filename=>{
+    const file=multipart(filename,bytes);
+    const response=await call('POST',`/api/admin/releases/${release.id}/assets?platform=Windows&arch=x64`,file.payload,file.headers);
+    assert.equal(response.statusCode,201,response.body);
+    return response.json().asset;
+  };
+  const asset=await upload('original.zip'),other=await upload('existing.zip');
+  const url=`/api/admin/assets/${asset.id}`,downloadUrl=`/api/downloads/${asset.id}`;
+  const stored=()=>app.db.prepare('SELECT * FROM assets WHERE id=?').get(asset.id);
+  const storedRelease=()=>app.db.prepare('SELECT * FROM releases WHERE id=?').get(release.id);
+  const auditCount=()=>app.db.prepare('SELECT COUNT(*) AS n FROM audit_log WHERE target_id=?').get(asset.id).n;
+  const fileIdentity=row=>({id:row.id,releaseId:row.release_id,storageName:row.storage_name,contentType:row.content_type,size:row.size,sha256:row.sha256,createdAt:row.created_at});
+  const originalIdentity=fileIdentity(stored());
+  const originalFiles=(await fs.readdir(path.join(dataDir,'uploads'))).sort();
+  const assertName=(response,filename)=>{
+    assert.match(response.headers['content-disposition'],/attachment;.*filename\*=UTF-8''/);
+    assert.equal(decodeURIComponent(response.headers['content-disposition'].split("filename*=UTF-8''")[1]),filename);
+  };
+  let filename='中文安装包-1.0.0.zip';
+
+  await t.test('改名接口检查登录与 CSRF，上传仍要求平台和架构',async()=>{
+    for(const route of [url,`/%61pi/%61dmin/assets/${asset.id}`]) {
+      assert.equal((await app.inject({method:'PATCH',url:route,payload:{filename}})).statusCode,401);
+      assert.equal((await call('PATCH',route,{filename},{'x-csrf-token':''})).statusCode,403);
+    }
+    assert.equal((await call('PATCH',url,{filename},{origin:'https://attacker.example'})).statusCode,403);
+    assert.equal((await call('PATCH','/api/admin/assets/missing',{filename})).statusCode,404);
+    const file=multipart('missing-metadata.zip',bytes);
+    for(const query of ['','?platform=Windows','?arch=x64'])assert.equal((await call('POST',`/api/admin/releases/${release.id}/assets${query}`,file.payload,file.headers)).statusCode,400);
+    assert.equal(stored().filename,'original.zip');
+    assert.deepEqual((await fs.readdir(path.join(dataDir,'uploads'))).sort(),originalFiles);
+  });
+  await t.test('草稿仅改名保留内容和文件 ID，并更新版本时间与审计',async()=>{
+    // 固定旧时间，避免依赖机器时钟的毫秒精度断言。
+    const previousTime='2000-01-01T00:00:00.000Z';
+    app.db.prepare('UPDATE releases SET updated_at=? WHERE id=?').run(previousTime,release.id);
+    const beforeAudit=auditCount();
+    const response=await call('PATCH',url,{filename});
+    assert.equal(response.statusCode,200,response.body);
+    assert.deepEqual(response.json().asset,{...asset,filename});
+    assert.deepEqual(fileIdentity(stored()),originalIdentity);
+    assert.notEqual(storedRelease().updated_at,previousTime);
+    assert.equal(auditCount(),beforeAudit+1);
+    assert.equal(app.db.prepare('SELECT action FROM audit_log WHERE target_id=? ORDER BY id DESC LIMIT 1').get(asset.id).action,'asset.rename');
+    const preview=await call('GET',`${url}/download`);
+    assert.equal(preview.statusCode,200);assertName(preview,filename);assert.deepEqual(preview.rawPayload,bytes);
+    assert.equal((await app.inject({url:downloadUrl})).statusCode,404);
+    const beforeNoop=storedRelease().updated_at;
+    assert.equal((await call('PATCH',url,{filename})).statusCode,200);
+    assert.equal(auditCount(),beforeAudit+1);assert.equal(storedRelease().updated_at,beforeNoop);
+  });
+  await t.test('非法名称与同版本重名被拒绝，失败不部分修改数据',async()=>{
+    const before=stored(),beforeRelease=storedRelease(),beforeAudit=auditCount();
+    const invalid=['',' ','.','..','../evil.zip','..\\evil.zip','/tmp/evil.zip','C:\\temp\\evil.zip','bad:name.zip','bad?.zip','bad*.zip','bad|name.zip','bad<name>.zip','bad"name.zip','bad\0name.zip','bad\r\nname.zip','bad\u007fname.zip','bad\u0085name.zip','bad\u2028name.zip',' leading.zip','trailing.zip ','trailing.','CON','con.txt','NUL.zip','AUX','PRN.exe','COM1.zip','LPT9.zip','COM¹.zip','con .zip','CONIN$.zip','bad\ud800.zip','x'.repeat(181)];
+    for(const invalidFilename of invalid) {
+      const response=await call('PATCH',url,{filename:invalidFilename});
+      assert.equal(response.statusCode,400,`非法名称应被拒绝：${JSON.stringify(invalidFilename)}，${response.body}`);
+    }
+    assert.equal((await call('PATCH',url,{})).statusCode,400);
+    assert.equal((await call('PATCH',url,{filename,unexpected:true})).statusCode,400);
+    const conflict=await call('PATCH',url,{filename:other.filename,platform:'Linux',arch:'arm64'});
+    assert.equal(conflict.statusCode,409,conflict.body);
+    assert.equal(conflict.json().error.code,'ASSET_FILENAME_CONFLICT');
+    assert.match(conflict.json().error.message,/同名安装包/);
+    assert.deepEqual(stored(),before);assert.deepEqual(storedRelease(),beforeRelease);assert.equal(auditCount(),beforeAudit);
+  });
+  await t.test('同版本并发改名只保留一个同名结果',async()=>{
+    const responses=await Promise.all([asset.id,other.id].map(id=>call('PATCH',`/api/admin/assets/${id}`,{filename:'shared.zip'})));
+    assert.deepEqual(responses.map(response=>response.statusCode).sort((a,b)=>a-b),[200,409]);
+    assert.equal(responses.find(response=>response.statusCode===409).json().error.code,'ASSET_FILENAME_CONFLICT');
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM assets WHERE release_id=? AND filename=?').get(release.id,'shared.zip').n,1);
+    assert.equal((await call('PATCH',url,{filename})).statusCode,200);
+    assert.equal((await call('PATCH',`/api/admin/assets/${other.id}`,{filename:other.filename})).statusCode,200);
+    assert.deepEqual(fileIdentity(stored()),originalIdentity);
+  });
+  await t.test('草稿平台和架构可以单独修改，未提交的字段保持不变',async()=>{
+    const platform=await call('PATCH',url,{platform:'Linux'});
+    assert.equal(platform.statusCode,200,platform.body);
+    assert.equal(platform.json().asset.platform,'Linux');assert.equal(platform.json().asset.arch,'x64');assert.equal(platform.json().asset.filename,filename);
+    const architecture=await call('PATCH',url,{arch:'arm64'});
+    assert.equal(architecture.statusCode,200,architecture.body);
+    assert.equal(architecture.json().asset.platform,'Linux');assert.equal(architecture.json().asset.arch,'arm64');assert.equal(architecture.json().asset.filename,filename);
+    assert.deepEqual(fileIdentity(stored()),originalIdentity);
+  });
+  await t.test('正式版改名后旧链接、完整下载、HEAD 和 Range 使用新名称',async()=>{
+    const published=await call('POST',`/api/admin/releases/${release.id}/publish`,{setLatest:true});
+    assert.equal(published.statusCode,200,published.body);
+    const beforeRelease=storedRelease();
+    filename='ReleaseDock 安装包 (正式版).zip';
+    const renamed=await call('PATCH',url,{filename});
+    assert.equal(renamed.statusCode,200,renamed.body);
+    const afterRelease=storedRelease();
+    for(const field of ['status','is_latest','published_at','created_at'])assert.equal(afterRelease[field],beforeRelease[field]);
+    const detail=await app.inject({url:`/api/releases/${release.id}`});
+    assert.equal(detail.json().assets.find(item=>item.id===asset.id).filename,filename);
+    const download=await app.inject({url:downloadUrl});
+    assert.equal(download.statusCode,200);assertName(download,filename);assert.deepEqual(download.rawPayload,bytes);
+    assert.equal(createHash('sha256').update(download.rawPayload).digest('hex'),sha256);
+    assert.equal(download.headers.etag,`"${sha256}"`);
+    const partial=await app.inject({url:downloadUrl,headers:{range:'bytes=2-8','if-range':`"${sha256}"`}});
+    assert.equal(partial.statusCode,206);assertName(partial,filename);assert.deepEqual(partial.rawPayload,bytes.subarray(2,9));
+    assert.equal(partial.headers['content-range'],`bytes 2-8/${bytes.length}`);
+    const head=await app.inject({method:'HEAD',url:downloadUrl});
+    assert.equal(head.statusCode,200);assertName(head,filename);assert.equal(head.body,'');assert.equal(Number(head.headers['content-length']),bytes.length);
+    assert.deepEqual(fileIdentity(stored()),originalIdentity);
+  });
+  await t.test('正式版仍锁定平台和架构，同时提交的名称不会部分生效',async()=>{
+    const before=stored(),beforeRelease=storedRelease(),beforeAudit=auditCount();
+    for(const metadata of [{platform:'Windows'},{arch:'x64'}]) {
+      const response=await call('PATCH',url,{filename:'不能部分保存.zip',...metadata});
+      assert.equal(response.statusCode,409,response.body);assert.equal(response.json().error.code,'RELEASE_IMMUTABLE');
+    }
+    assert.deepEqual(stored(),before);assert.deepEqual(storedRelease(),beforeRelease);assert.equal(auditCount(),beforeAudit);
+    filename='ReleaseDock 修订名称.zip';
+    const sameMetadata=await call('PATCH',url,{filename,platform:'Linux',arch:'arm64'});
+    assert.equal(sameMetadata.statusCode,200,sameMetadata.body);assert.equal(sameMetadata.json().asset.filename,filename);
+    const duplicate=await call('PATCH',url,{filename:other.filename});
+    assert.equal(duplicate.statusCode,409,duplicate.body);assert.equal(stored().filename,filename);
+  });
+  await t.test('下架期间允许改名但不开放下载，重新发布沿用原链接',async()=>{
+    assert.equal((await call('POST',`/api/admin/releases/${release.id}/withdraw`)).statusCode,200);
+    filename='ReleaseDock 离线安装包.zip';
+    const renamed=await call('PATCH',url,{filename});
+    assert.equal(renamed.statusCode,200,renamed.body);assert.equal(storedRelease().status,'withdrawn');
+    assert.equal((await app.inject({url:downloadUrl})).statusCode,404);
+    assert.equal((await call('PATCH',url,{platform:'Windows'})).statusCode,409);
+    const preview=await call('GET',`${url}/download`);
+    assert.equal(preview.statusCode,200);assertName(preview,filename);assert.deepEqual(preview.rawPayload,bytes);
+    assert.equal((await call('POST',`/api/admin/releases/${release.id}/publish`,{setLatest:true})).statusCode,200);
+    const download=await app.inject({url:downloadUrl});
+    assert.equal(download.statusCode,200);assertName(download,filename);assert.deepEqual(download.rawPayload,bytes);
+  });
+  await t.test('重启后文件名称、审计和原始存储内容仍然保留',async()=>{
+    const before=stored(),beforeAudit=auditCount();
+    await app.close();
+    app=await buildApp(options);
+    assert.equal((await call('GET','/api/session')).json().authenticated,true);
+    assert.deepEqual(stored(),before);assert.equal(auditCount(),beforeAudit);
+    assert.equal((await call('GET','/api/admin/assets')).json().assets.find(item=>item.id===asset.id).filename,filename);
+    const download=await app.inject({url:downloadUrl});
+    assert.equal(download.statusCode,200);assertName(download,filename);assert.deepEqual(download.rawPayload,bytes);
+    assert.deepEqual(fileIdentity(stored()),originalIdentity);
+    assert.deepEqual((await fs.readdir(path.join(dataDir,'uploads'))).sort(),originalFiles);
+    assert.deepEqual(await fs.readFile(path.join(dataDir,'uploads',originalIdentity.storageName)),bytes);
+  });
+});
+
 test('Range 与语义版本号边界验证',()=>{
   assert.deepEqual(parseRange('bytes=2-',10),{start:2,end:9});
   assert.deepEqual(parseRange('bytes=-100',10),{start:0,end:9});

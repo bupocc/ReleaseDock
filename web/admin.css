@@ -147,3 +147,49 @@
   .project-help{padding:20px 18px}.project-help p{font-size:11px}.project-help .link-button{font-size:11px}.release-summary{padding:18px;gap:20px}.release-summary strong{font-size:24px}.release-summary>div>span:last-child{font-size:11px}.release-workflow{font-size:11px;line-height:1.9}.release-workflow>div{gap:11px}.release-workflow i{width:10px}.admin-tip{font-size:11px}.admin-footer{font-size:10px;gap:15px}.settings-fields{padding-inline:19px;gap:23px}.settings-fields input,.settings-fields textarea{font-size:16px}.settings-fields .form-label{font-size:12px}.settings-notice{font-size:11px}.admin-empty{padding:32px 20px;min-height:235px}.admin-empty h3{font-size:18px}.admin-empty p{font-size:12px}
 }
 @media(max-width:390px){.admin-topbar-right{gap:10px}.admin-breadcrumb{font-size:11px}.topbar-logout>span{display:none}.topbar-divider{display:none}.stat-value{font-size:26px}.stat-card{padding:15px 12px}.table-tabs{gap:13px}.table-tabs button{font-size:11px}.table-toolbar-controls .search-field{width:100%;flex:auto}.table-select{max-width:100%;width:100%}.onboarding-panel>div{min-width:160px}}
+
+/* 附件名称在各管理页中采用同一个操作入口与独立弹窗。 */
+.asset-rename-trigger{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:31px;padding:4px 8px;border:1px solid #dfe9d6;border-radius:5px;background:#f5f8f0;color:#476c35;font-size:11px;line-height:1.5;white-space:nowrap}
+.asset-rename-trigger:hover:enabled{border-color:#bfd0ac;background:#edf4e5;color:#315b27}
+.asset-rename-trigger:disabled{opacity:.5;cursor:not-allowed}
+.file-name-details{display:flex;flex-direction:column;align-items:flex-start;min-width:0}
+.file-name-details>[data-asset-filename]{overflow-wrap:anywhere;white-space:normal;line-height:1.85}
+.file-rename-action{margin-top:7px}
+.asset-rename-dialog{width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - 32px);margin:auto;padding:0;border:1px solid #dbe5cf;border-radius:14px;background:#fff;color:var(--ink);box-shadow:0 24px 80px #203b2e2b;overflow:auto}
+.asset-rename-dialog::backdrop{background:#17291f70;backdrop-filter:blur(3px)}
+.asset-rename-header{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:22px 25px;background:#fafcf7;border-bottom:1px solid #e5ebdf}
+.asset-rename-heading{display:flex;align-items:center;gap:13px;min-width:0}
+.asset-rename-mark{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:43px;height:43px;border:1px solid #d7e3ca;border-radius:11px;background:#edf4e6;color:#597b43}
+.asset-rename-eyebrow{display:block;font:9px var(--number);letter-spacing:1.8px;color:#73876a;margin-bottom:5px}
+.asset-rename-header h2{font-size:21px;font-weight:500;line-height:1.5;letter-spacing:-.3px}
+.asset-rename-close{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:34px;height:34px;border:1px solid #e1e8d8;border-radius:7px;background:#fff;color:#6f825e}
+.asset-rename-close:hover:enabled{background:#eef4e7;color:#456b32}
+.asset-rename-body{padding:23px 25px 24px}
+.asset-rename-body>p:first-child{font-size:12px;color:#66765c;line-height:1.8}
+.asset-rename-current{display:flex;align-items:flex-start;gap:11px;margin-top:17px;padding:14px 15px;border:1px solid #e3e9dc;border-radius:8px;background:#fafcf7}
+.asset-rename-current>svg{margin-top:3px;color:#7a9068}
+.asset-rename-current>div{min-width:0}
+.asset-rename-current span{font-size:10px;color:#718364}
+.asset-rename-current strong{display:block;margin-top:3px;color:#486239;font:13px/1.8 var(--number);overflow-wrap:anywhere}
+.asset-rename-current small{display:block;margin-top:3px;font-size:11px;color:#728463}
+.asset-rename-label{display:block;margin:21px 0 9px;font-size:12px;color:#455e39;font-weight:500}
+#asset-rename-filename{display:block;width:100%;min-height:44px;border:1px solid #cddbc0;border-radius:7px;padding:10px 12px;background:white;color:#2e4929;font:13px/1.7 var(--number)}
+#asset-rename-filename:hover:enabled{border-color:#aabf99}
+#asset-rename-filename:focus{outline:2px solid #8cab78;outline-offset:2px;border-color:#8cab78}
+#asset-rename-filename[aria-invalid=true]{border-color:#b86e54}
+#asset-rename-filename[aria-invalid=true]:focus{outline-color:#c89780}
+#asset-rename-filename:disabled{opacity:.65;background:#f5f7f1;cursor:wait}
+.asset-rename-input-meta{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-top:9px;font-size:11px;line-height:1.8;color:#6e8061}
+.asset-rename-input-meta>.mono{white-space:nowrap;font-size:11px}
+.asset-rename-input-meta .over-limit{color:#a34836}
+.asset-rename-error{min-height:20px;margin-top:9px;font-size:12px;color:#a24d36;line-height:1.8;overflow-wrap:anywhere}
+.asset-rename-note{display:flex;align-items:flex-start;gap:8px;margin-top:13px;padding:12px 13px;border-radius:7px;background:#f0f5e9;color:#657f51;font-size:11px;line-height:1.9}
+.asset-rename-note>svg{margin-top:3px}
+.asset-rename-footer{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:18px 25px;border-top:1px solid #e4ebdc;background:#fafcf7}
+.asset-rename-footer>div{display:flex;justify-content:flex-end;align-items:center;gap:9px;flex-shrink:0;margin-left:auto}
+.asset-rename-footer .btn{font-size:12px;min-height:39px}
+.asset-rename-progress{font-size:11px;color:#63834c;line-height:1.8}
+.asset-rename-progress:empty{display:none}
+@media(max-width:600px){
+  .asset-rename-dialog{width:calc(100vw - 28px);max-height:calc(100dvh - 28px);border-radius:12px}.asset-rename-header{padding:19px 18px;gap:12px}.asset-rename-heading{gap:11px}.asset-rename-header h2{font-size:20px}.asset-rename-mark{width:40px;height:40px}.asset-rename-close{width:34px;height:34px}.asset-rename-body{padding:20px 18px 22px}.asset-rename-current{padding:13px;gap:9px}.asset-rename-current strong{font-size:13px}.asset-rename-label{font-size:13px}#asset-rename-filename{font-size:16px;min-height:47px;padding-inline:11px}.asset-rename-input-meta{font-size:11px;gap:8px}.asset-rename-error{font-size:12px}.asset-rename-note{font-size:11px;padding:11px 12px}.asset-rename-footer{padding:17px 18px;flex-wrap:wrap;gap:10px}.asset-rename-footer>div{gap:10px}.asset-rename-footer .btn{min-height:42px;font-size:13px;padding-inline:15px}.asset-rename-progress{font-size:11px}.file-rename-action{min-height:34px;font-size:12px}
+}

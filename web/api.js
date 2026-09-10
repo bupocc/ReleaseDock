@@ -1,5 +1,19 @@
+import { Marked } from './vendor/marked.js';
+import DOMPurify from './vendor/purify.js';
+
 let csrfToken = '';
 let sessionRequest;
+
+const markdown = new Marked({
+  gfm: true,
+  breaks: true,
+  async: false,
+  renderer: {
+    // 更新日志中的原始 HTML 按文字显示；图片说明保留为文字，避免加载外部资源。
+    html: ({ text }) => escapeHtml(text),
+    image: ({ text }) => escapeHtml(text),
+  },
+});
 
 export class ApiError extends Error {
   constructor(message, status = 0, code = 'REQUEST_FAILED') {
@@ -95,33 +109,30 @@ export function safeWebsite(value) {
   } catch { return ''; }
 }
 
-// 仅渲染有限的 Markdown 结构；所有正文先转义，不允许 HTML 和脚本链接。
+// 后台预览和公开详情共享解析器；解析 Markdown 后再限制 HTML 标签和链接协议。
 export function renderNotes(value) {
   if (!String(value || '').trim()) return '<p class="muted">此版本暂未填写更新说明。</p>';
-  const inline = (text) => escapeHtml(text).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  const lines = String(value).replaceAll('\r', '').split('\n');
-  let html = '', list = '', code = null;
-  const closeList = () => { if (list) { html += `</${list}>`; list = ''; } };
-  for (const line of lines) {
-    if (/^\s*```/.test(line)) {
-      closeList();
-      if (code === null) code = [];
-      else { html += `<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`; code = null; }
-      continue;
-    }
-    if (code !== null) { code.push(line); continue; }
-    const heading = line.match(/^\s*#{1,6}\s+(.+)$/);
-    const item = line.match(/^\s*(?:([-*+])|\d+[.)])\s+(.+)$/);
-    if (heading) { closeList(); html += `<h4>${inline(heading[1])}</h4>`; }
-    else if (item) {
-      const type = item[1] ? 'ul' : 'ol';
-      if (list !== type) { closeList(); html += `<${type}>`; list = type; }
-      html += `<li>${inline(item[2])}</li>`;
-    } else { closeList(); if (line.trim()) html += `<p>${inline(line)}</p>`; }
+  const fragment = DOMPurify.sanitize(markdown.parse(String(value)), {
+    ALLOWED_TAGS: ['a', 'blockquote', 'br', 'code', 'del', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'li', 'ol', 'p', 'pre', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'],
+    ALLOWED_ATTR: ['href', 'title', 'start', 'align'],
+    ALLOW_DATA_ATTR: false,
+    ALLOW_ARIA_ATTR: false,
+    RETURN_DOM_FRAGMENT: true,
+  });
+  for (const link of fragment.querySelectorAll('a[href]')) {
+    try {
+      const destination = new URL(link.getAttribute('href'), window.location.href);
+      if (!['http:', 'https:', 'mailto:'].includes(destination.protocol)) {
+        link.removeAttribute('href');
+      } else if (destination.origin !== window.location.origin) {
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+      }
+    } catch { link.removeAttribute('href'); }
   }
-  closeList();
-  if (code !== null) html += `<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`;
-  return html;
+  const container = document.createElement('div');
+  container.append(fragment);
+  return container.innerHTML;
 }
 
 export async function copyText(text) {

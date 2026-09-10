@@ -11,6 +11,7 @@ export const projectPatchSchema=objectSchema(projectFields);
 export const releaseSchema=objectSchema({...releaseFields,projectId:text(64,1)},['projectId','version','title','channel']);
 export const releasePatchSchema=objectSchema(releaseFields);
 export const assetMetadataSchema=objectSchema({platform:text(32,1),arch:text(32,1)},['platform','arch']);
+export const assetPatchSchema={...objectSchema({filename:text(180,1),platform:text(32,1),arch:text(32,1)}),minProperties:1};
 export const siteSchema=objectSchema({name:text(80,1),description:text(1000),announcement:text(2000)});
 
 export function validateWebsite(website) {

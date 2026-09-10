@@ -1,6 +1,7 @@
 import { icon, projectMark } from './icons.js';
 import { api, escapeHtml, formatBytes, renderNotes } from './api.js';
 import { url, toast } from './app.js';
+import { assetRenameButton, openAssetRename } from './asset-rename.js';
 
 const SYSTEMS = ['Windows', 'macOS', 'Linux'];
 const ARCHES = ['x64', 'arm64', 'x86', 'universal'];
@@ -54,7 +55,7 @@ function makeRelease(params, data) {
     version: str(release?.version), title: str(release?.title), notes: str(release?.notes),
     channel: release?.channel === 'prerelease' ? 'prerelease' : 'stable',
     status: release?.status || 'draft', latest: release && release.status !== 'draft' ? !!release.isLatest : release?.channel !== 'prerelease',
-    assets: Array.isArray(data.assets) ? [...data.assets] : [], pending: [], busy: false, allowLeave: false,
+    assets: Array.isArray(data.assets) ? [...data.assets] : [], pending: [], busy: false, renaming: false, allowLeave: false,
     saved: !!release, updatedAt: release?.updatedAt || '',
   };
   state.readonly = !!release && release.status !== 'draft';
@@ -73,7 +74,7 @@ function assetOptions(values, selected, labels = {}) {
 
 function assetRows(state) {
   const locked = state.readonly || state.busy;
-  const serverRows = state.assets.map(asset => `<div class="af-file-row" data-af-asset="${esc(asset.id)}"><span class="af-file-icon">${icon(systemIcon(asset.platform), 21)}</span><div class="af-file-info"><strong title="${esc(asset.filename)}">${esc(asset.filename)}</strong><span><span class="mono">${formatBytes(asset.size)}</span><span class="af-file-dot">·</span>已上传${asset.sha256 ? ' · SHA-256 已生成' : ''}</span></div><select class="af-file-select" data-af-asset-platform="${esc(asset.id)}" aria-label="${esc(asset.filename)} 的操作系统"${locked ? ' disabled' : ''}>${assetOptions(SYSTEMS, asset.platform)}</select><select class="af-file-select af-arch-select" data-af-asset-arch="${esc(asset.id)}" aria-label="${esc(asset.filename)} 的处理器架构"${locked ? ' disabled' : ''}>${assetOptions(ARCHES, asset.arch, ARCH_LABELS)}</select>${state.readonly ? `<span class="af-file-locked" title="此版本的文件不可修改">${icon('lock', 13)}</span>` : `<button class="af-remove-file" type="button" data-af-delete-asset="${esc(asset.id)}" aria-label="移除 ${esc(asset.filename)}"${locked ? ' disabled' : ''}>${icon('x', 14)}</button>`}</div>`).join('');
+  const serverRows = state.assets.map(asset => `<div class="af-file-row af-uploaded-file" data-af-asset="${esc(asset.id)}"><span class="af-file-icon">${icon(systemIcon(asset.platform), 21)}</span><div class="af-file-info"><strong data-asset-filename title="${esc(asset.filename)}">${esc(asset.filename)}</strong><span><span class="mono">${formatBytes(asset.size)}</span><span class="af-file-dot">·</span>已上传${asset.sha256 ? ' · SHA-256 已生成' : ''}</span>${assetRenameButton(asset, 'af-rename-file', state.busy || state.renaming)}</div><select class="af-file-select" data-af-asset-platform="${esc(asset.id)}" aria-label="${esc(asset.filename)} 的操作系统"${locked ? ' disabled' : ''}>${assetOptions(SYSTEMS, asset.platform)}</select><select class="af-file-select af-arch-select" data-af-asset-arch="${esc(asset.id)}" aria-label="${esc(asset.filename)} 的处理器架构"${locked ? ' disabled' : ''}>${assetOptions(ARCHES, asset.arch, ARCH_LABELS)}</select>${state.readonly ? `<span class="af-file-locked" title="此版本的平台、架构与文件内容不可修改">${icon('lock', 13)}</span>` : `<button class="af-remove-file" type="button" data-af-delete-asset="${esc(asset.id)}" aria-label="移除 ${esc(asset.filename)}"${locked ? ' disabled' : ''}>${icon('x', 14)}</button>`}</div>`).join('');
   const pendingRows = state.pending.map(item => `<div class="af-file-row af-pending-row${item.status === 'failed' ? ' af-upload-failed' : ''}" data-af-pending="${item.key}"><span class="af-file-icon">${item.status === 'uploading' ? '<span class="af-spinner" aria-label="正在上传"></span>' : icon(systemIcon(item.platform), 21)}</span><div class="af-file-info"><strong title="${esc(item.file.name)}">${esc(item.file.name)}</strong><span><span class="mono">${formatBytes(item.file.size)}</span><span class="af-file-dot">·</span>${item.status === 'uploading' ? '正在上传，请勿关闭页面' : item.status === 'failed' ? '上传失败，可重试' : '等待上传'}</span></div><select class="af-file-select" data-af-pending-platform="${item.key}" aria-label="${esc(item.file.name)} 的操作系统"${locked ? ' disabled' : ''}>${assetOptions(SYSTEMS, item.platform)}</select><select class="af-file-select af-arch-select" data-af-pending-arch="${item.key}" aria-label="${esc(item.file.name)} 的处理器架构"${locked ? ' disabled' : ''}>${assetOptions(ARCHES, item.arch, ARCH_LABELS)}</select><button class="af-remove-file" type="button" data-af-remove-pending="${item.key}" aria-label="取消上传 ${esc(item.file.name)}"${locked ? ' disabled' : ''}>${icon('x', 14)}</button>${item.error ? `<p class="af-upload-error">${esc(item.error)}<button type="button" data-af-retry-file="${item.key}"${locked ? ' disabled' : ''}>重试</button></p>` : ''}</div>`).join('');
   return serverRows + pendingRows || `<div class="af-files-empty">${state.readonly ? '此版本没有安装包。' : '还没有安装包，选择文件开始上传。'}</div>`;
 }
@@ -84,9 +85,9 @@ function renderPublish(state) {
   const title = locked ? '版本详情' : state.id ? '编辑版本草稿' : '发布新版本';
   const actions = `<a class="btn btn-light" href="${url('releases')}">${icon('back', 14)}返回版本列表</a>${locked ? `<a class="btn btn-primary" href="${url('publish', `project=${encodeURIComponent(state.projectId)}`)}">${icon('plus', 14)}发布新版本</a>` : '<button class="btn btn-light" id="af-save-draft" type="button">保存草稿</button>'}`;
   return `<section class="af-page" id="af-release-page">
-    ${heading(title, locked ? '版本内容与安装包保持不变，新的改进请发布新版本。' : '把新的改进，带给每一位使用者。', actions)}
+    ${heading(title, locked ? '查看版本内容与安装包，文件名可单独调整。' : '把新的改进，带给每一位使用者。', actions)}
     ${feedbackMarkup()}
-    ${locked ? `<div class="af-readonly-notice">${icon('lock', 16)}${state.status === 'withdrawn' ? '此版本已撤回，访客无法下载；版本记录以只读方式保留。' : '此版本已经发布。为保持下载内容和校验值一致，版本信息及文件不可修改。'}</div>` : ''}
+    ${locked ? `<div class="af-readonly-notice">${icon('lock', 16)}${state.status === 'withdrawn' ? '此版本已撤回，访客无法下载。可重命名安装包，版本信息与文件内容仍以只读方式保留。' : '此版本已经发布，可重命名安装包。版本信息、平台、架构与文件内容保持不变。'}</div>` : ''}
     <form id="af-publish-form" class="af-layout" novalidate>
       <div class="af-main-column">
         <section class="af-card">
@@ -103,7 +104,7 @@ function renderPublish(state) {
           <div class="af-editor"><div class="af-editor-toolbar"><div class="af-editor-tabs" role="tablist" aria-label="更新日志视图"><button type="button" role="tab" aria-selected="true" aria-controls="af-notes-edit-panel" id="af-edit-tab" class="active" data-af-editor-tab="edit">${locked ? '原文' : '编辑'}</button><button type="button" role="tab" aria-selected="false" aria-controls="af-notes-preview-panel" id="af-preview-tab" data-af-editor-tab="preview">预览</button></div>${locked ? '' : `<div class="af-format-actions" id="af-format-actions"><button type="button" data-af-format="heading" aria-label="插入标题">H</button><button type="button" data-af-format="bold" aria-label="插入粗体">${icon('bold', 14)}</button><button type="button" data-af-format="list" aria-label="插入列表">${icon('list', 15)}</button><button type="button" data-af-format="code" aria-label="插入代码">${icon('code', 15)}</button></div>`}</div><div id="af-notes-edit-panel" role="tabpanel" aria-labelledby="af-edit-tab"><textarea id="af-release-notes" name="notes" maxlength="100000" spellcheck="false" placeholder="## 新增&#10;- 介绍本次新增的功能&#10;&#10;## 优化&#10;- 记录体验改进与问题修复" aria-label="Markdown 更新日志" aria-describedby="af-error-notes"${locked ? ' readonly' : ''}>${esc(state.notes)}</textarea></div><div class="af-markdown af-inline-preview" id="af-notes-preview-panel" role="tabpanel" aria-labelledby="af-preview-tab" hidden></div><div class="af-editor-footer"><span><span class="af-markdown-badge">M↓</span> 支持 Markdown 语法</span><span id="af-notes-count" class="mono">${state.notes.length} 字</span></div></div>${errorSlot('notes')}
         </section>
         <section class="af-card af-assets-card">
-          ${cardHeading('安装包', locked ? '此版本保留的真实下载文件。' : '选择文件后，先保存草稿，再逐个上传。', `<span class="af-file-count mono" id="af-file-count">${state.assets.length} 个文件</span>`)}
+          ${cardHeading('安装包', locked ? '可调整下载文件名，内容与校验值保持不变。' : '选择文件后，先保存草稿，再逐个上传。', `<span class="af-file-count mono" id="af-file-count">${state.assets.length} 个文件</span>`)}
           ${locked ? '' : `<div class="af-dropzone" id="af-dropzone"><span class="af-upload-symbol">${icon('upload', 24)}</span><p><button type="button" id="af-select-files">点击选择文件</button><span>，或将文件拖放到这里</span></p><small>EXE、DMG、AppImage、ZIP 等 · 每个文件最大 2 GB</small><input id="af-package-input" type="file" multiple hidden></div>`}
           <div class="af-files" id="af-file-list">${assetRows(state)}</div>${errorSlot('assets')}
           ${locked ? '' : `<div class="af-upload-footer"><span id="af-upload-status" aria-live="polite">文件上传完成后，才可正式发布。</span><button class="btn btn-light btn-sm" id="af-upload-pending" type="button" hidden>上传待处理文件</button></div>`}
@@ -112,14 +113,14 @@ function renderPublish(state) {
       <aside class="af-side-column">
         <section class="af-card af-publish-settings">
           ${cardHeading('发布设置', '', icon('settings', 17))}
-          <div class="af-status-line"><span>当前状态</span><span class="tag ${state.status === 'published' ? 'tag-green' : 'tag-orange'}" id="af-release-status">${state.id ? statusLabel(state.status) : '尚未保存'}</span></div><p class="af-settings-description" id="af-settings-description">${locked ? '如需修改内容或安装包，请创建一个新的版本。' : state.project.isPublic ? '准备就绪后发布，让访客查看更新并下载安装包。' : '项目当前隐藏；发布后的版本仍不会向访客展示。'}</p>
+          <div class="af-status-line"><span>当前状态</span><span class="tag ${state.status === 'published' ? 'tag-green' : 'tag-orange'}" id="af-release-status">${state.id ? statusLabel(state.status) : '尚未保存'}</span></div><p class="af-settings-description" id="af-settings-description">${locked ? '可在安装包区域重命名文件。内容更新请发布新版本。' : state.project.isPublic ? '准备就绪后发布，让访客查看更新并下载安装包。' : '项目当前隐藏；发布后的版本仍不会向访客展示。'}</p>
           <div class="af-setting-divider"></div><label class="af-toggle-row"><span><strong>设为最新稳定版</strong><small id="af-latest-hint">在项目前台优先展示此版本</small></span><span class="af-switch"><input id="af-latest" type="checkbox" name="latest"${state.latest ? ' checked' : ''}${locked || state.channel !== 'stable' ? ' disabled' : ''}><span></span></span></label>
-          <div class="af-setting-divider"></div><div class="af-checklist"><span>${icon('check', 13)}草稿内容仅管理员可见</span><span>${icon('check', 13)}发布后保留固定文件与校验值</span></div>
+          <div class="af-setting-divider"></div><div class="af-checklist"><span>${icon('check', 13)}草稿内容仅管理员可见</span><span>${icon('check', 13)}发布后保留原文件内容与校验值</span></div>
         </section>
         <section class="af-card af-release-summary">
           <div class="af-summary-label">发布预览 <span class="mono">PREVIEW</span></div><div class="af-summary-identity"><span id="af-summary-mark">${projectMark(state.project)}</span><div><h3 id="af-summary-name">${esc(state.project.name)}</h3><span class="mono" id="af-summary-version">${state.version ? `v${esc(state.version)}` : '待填写版本号'}</span></div><span class="tag tag-green" id="af-summary-channel">${state.channel === 'stable' ? '稳定版' : '预发布'}</span></div>
           <p id="af-summary-title">${esc(state.title || '为这次更新写一个标题')}</p><div class="af-summary-meta"><span>${icon('file', 13)}<span id="af-summary-files">${state.assets.length} 个安装包</span></span><span id="af-summary-visibility">${icon(state.project.isPublic ? 'globe' : 'lock', 13)}${state.project.isPublic ? '公开项目' : '隐藏项目'}</span></div>
-          <button class="btn btn-light btn-wide" id="af-preview-release" type="button">${icon('eye', 15)}预览发布效果</button>${locked ? '' : `<button class="btn btn-primary btn-wide af-publish-button" id="af-publish-release" type="submit">${icon('upload', 15)}发布版本</button>`}<p class="af-save-status" id="af-save-status" aria-live="polite">${locked ? '版本以只读方式保留' : state.id ? '草稿已保存' : '填写版本信息，开始一次新发布'}</p>
+          <button class="btn btn-light btn-wide" id="af-preview-release" type="button">${icon('eye', 15)}预览发布效果</button>${locked ? '' : `<button class="btn btn-primary btn-wide af-publish-button" id="af-publish-release" type="submit">${icon('upload', 15)}发布版本</button>`}<p class="af-save-status" id="af-save-status" aria-live="polite">${locked ? '版本内容只读，文件名可单独调整' : state.id ? '草稿已保存' : '填写版本信息，开始一次新发布'}</p>
         </section><p class="af-side-note">${icon('info', 13)}好的更新日志，也是一份写给使用者的说明。</p>
       </aside>
     </form><dialog class="af-dialog" id="af-preview-dialog" aria-labelledby="af-dialog-heading"></dialog>
@@ -266,7 +267,7 @@ function bindRelease(state) {
     return valid;
   };
   const run = async (message, task) => {
-    if (state.busy || state.readonly) return;
+    if (state.busy || state.readonly || state.renaming) return;
     state.busy = true;
     feedback('');
     controls();
@@ -331,7 +332,7 @@ function bindRelease(state) {
     });
   };
   const addFiles = async files => {
-    if (state.busy || state.readonly) { toast('当前操作尚未完成，请稍后添加文件。'); return; }
+    if (state.busy || state.readonly || state.renaming) { toast('当前操作尚未完成，请稍后添加文件。'); return; }
     const rejected = [];
     let added = 0;
     for (const file of files) {
@@ -355,6 +356,30 @@ function bindRelease(state) {
   });
   form.querySelector('#af-upload-pending')?.addEventListener('click', () => upload());
   list.addEventListener('click', async event => {
+    const renameButton = event.target.closest('[data-asset-rename]');
+    if (renameButton) {
+      if (state.busy || state.renaming) return;
+      const asset = state.assets.find(item => item.id === renameButton.dataset.assetRename);
+      if (!asset) return;
+      state.renaming = true;
+      let renamed;
+      try { renamed = await openAssetRename(asset, renameButton); }
+      catch (error) { feedback(errorMessage(error)); }
+      finally { state.renaming = false; }
+      if (renamed) {
+        // 只更新附件状态与文件行，不保存或重绘仍在编辑中的版本内容。
+        state.assets = state.assets.map(item => item.id === renamed.id ? { ...item, ...renamed } : item);
+        syncFiles();
+        dialog.querySelectorAll('[data-af-preview-asset-name]').forEach(node => {
+          if (node.dataset.afPreviewAssetName === renamed.id) { node.textContent = renamed.filename; node.title = renamed.filename; }
+        });
+        const unsaved = !state.readonly && JSON.stringify(releasePayload(state)) !== state.fingerprint;
+        setStatus(unsaved ? '文件名已保存，版本内容仍有未保存的更改' : state.pending.length ? '文件名已保存，仍有文件等待上传' : '文件名已保存');
+        toast('安装包已重命名。');
+      }
+      [...list.querySelectorAll('[data-asset-rename]')].find(button => button.dataset.assetRename === asset.id)?.focus({ preventScroll: true });
+      return;
+    }
     const retry = event.target.closest('[data-af-retry-file]');
     if (retry) { await upload(retry.dataset.afRetryFile); return; }
     const remove = event.target.closest('[data-af-remove-pending]');
@@ -418,7 +443,7 @@ function bindRelease(state) {
   }));
   form.querySelector('#af-preview-release').addEventListener('click', () => {
     collect();
-    dialog.innerHTML = `<div class="af-dialog-shell"><header class="af-dialog-header"><div><span class="af-eyebrow">RELEASE PREVIEW</span><h2 id="af-dialog-heading">发布效果预览</h2></div><button class="btn btn-light btn-icon" type="button" data-af-close aria-label="关闭预览">${icon('x', 16)}</button></header><div class="af-dialog-body"><div class="af-dialog-identity">${projectMark(state.project)}<div><h3>${esc(state.project.name)} <span class="mono">${state.version ? `v${esc(state.version)}` : '版本号待填写'}</span></h3><span class="tag ${state.channel === 'stable' ? 'tag-green' : 'tag-orange'}">${state.channel === 'stable' ? '稳定版' : '预发布'}</span>${state.latest ? '<span class="af-dialog-latest">最新稳定版</span>' : ''}</div></div><h3 class="af-dialog-title">${esc(state.title || '发布标题待填写')}</h3><div class="af-markdown">${renderNotes(state.notes)}</div><div class="af-dialog-downloads"><h4>下载安装包 <span class="mono">${state.assets.length}</span></h4>${state.assets.length ? state.assets.map(asset => `<div>${icon(systemIcon(asset.platform), 18)}<span><strong>${esc(asset.platform)} <small>${esc(ARCH_LABELS[asset.arch] || asset.arch)}</small></strong><span>${esc(asset.filename)}</span></span><span class="mono">${formatBytes(asset.size)}</span>${icon('download', 16)}</div>`).join('') : '<p class="muted">安装包尚未上传。</p>'}</div></div><footer class="af-dialog-footer"><span>${icon('info', 12)}${state.project.isPublic ? state.status === 'published' ? '此版本已经公开发布。' : '仅预览当前内容，正式发布后访客才能下载。' : '当前项目隐藏，访客无法查看或下载。'}</span><button type="button" class="btn btn-primary" data-af-close>${state.readonly ? '关闭预览' : '返回继续编辑'}</button></footer></div>`;
+    dialog.innerHTML = `<div class="af-dialog-shell"><header class="af-dialog-header"><div><span class="af-eyebrow">RELEASE PREVIEW</span><h2 id="af-dialog-heading">发布效果预览</h2></div><button class="btn btn-light btn-icon" type="button" data-af-close aria-label="关闭预览">${icon('x', 16)}</button></header><div class="af-dialog-body"><div class="af-dialog-identity">${projectMark(state.project)}<div><h3>${esc(state.project.name)} <span class="mono">${state.version ? `v${esc(state.version)}` : '版本号待填写'}</span></h3><span class="tag ${state.channel === 'stable' ? 'tag-green' : 'tag-orange'}">${state.channel === 'stable' ? '稳定版' : '预发布'}</span>${state.latest ? '<span class="af-dialog-latest">最新稳定版</span>' : ''}</div></div><h3 class="af-dialog-title">${esc(state.title || '发布标题待填写')}</h3><div class="af-markdown">${renderNotes(state.notes)}</div><div class="af-dialog-downloads"><h4>下载安装包 <span class="mono">${state.assets.length}</span></h4>${state.assets.length ? state.assets.map(asset => `<div>${icon(systemIcon(asset.platform), 18)}<span><strong>${esc(asset.platform)} <small>${esc(ARCH_LABELS[asset.arch] || asset.arch)}</small></strong><span data-af-preview-asset-name="${esc(asset.id)}" title="${esc(asset.filename)}">${esc(asset.filename)}</span></span><span class="mono">${formatBytes(asset.size)}</span>${icon('download', 16)}</div>`).join('') : '<p class="muted">安装包尚未上传。</p>'}</div></div><footer class="af-dialog-footer"><span>${icon('info', 12)}${state.project.isPublic ? state.status === 'published' ? '此版本已经公开发布。' : '仅预览当前内容，正式发布后访客才能下载。' : '当前项目隐藏，访客无法查看或下载。'}</span><button type="button" class="btn btn-primary" data-af-close>${state.readonly ? '关闭预览' : '返回继续编辑'}</button></footer></div>`;
     dialog.querySelectorAll('[data-af-close]').forEach(button => button.addEventListener('click', () => dialog.close()));
     dialog.showModal();
   });
@@ -437,7 +462,7 @@ function bindRelease(state) {
     });
   });
   window.addEventListener('beforeunload', event => {
-    if (!state.allowLeave && !state.readonly && (state.busy || state.pending.length || JSON.stringify(releasePayload(state)) !== state.fingerprint)) { event.preventDefault(); event.returnValue = ''; }
+    if (!state.allowLeave && (state.renaming || (!state.readonly && (state.busy || state.pending.length || JSON.stringify(releasePayload(state)) !== state.fingerprint)))) { event.preventDefault(); event.returnValue = ''; }
   });
   controls(); updateSummary();
   if (state.readonly) showTab(tabs[1]);

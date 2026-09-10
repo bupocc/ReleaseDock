@@ -15,6 +15,9 @@
 .af-upload-failed .af-file-info>span{color:#b1896b}
 .af-pending-row .af-file-info strong{color:#8c9a7f}
 .af-file-info>span{overflow:hidden}
+.af-uploaded-file .af-file-info strong{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.af-rename-file{margin-top:6px;max-width:100%;min-height:30px;padding:4px 7px;font-size:11px}
+.af-uploaded-file .af-file-locked{color:#80926e}
 .af-busy .af-dropzone{background:#f5f7f0;border-color:#d9e0cf}
 .af-busy .af-save-status{color:#6d8d54}
 .af-icon-status{font-size:10px;color:#8ca076;line-height:1.9;margin-top:14px;overflow-wrap:anywhere}
@@ -231,6 +234,7 @@
 .af-dialog-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;border-top:1px solid var(--line);background:#fafcf6;padding:17px 28px}
 .af-dialog-footer>span{display:flex;align-items:center;gap:5px;font-size:9px;color:#a2b092}
 .af-dialog-footer .btn{font-size:11px;min-height:35px}
+@media(max-width:600px){.af-uploaded-file .af-rename-file{min-height:34px;font-size:12px;padding-inline:8px}.af-uploaded-file .af-file-locked{grid-column:4;grid-row:1;align-self:start;margin-top:5px}}
 @media(min-width:1600px){.af-page{max-width:1170px}.af-layout{gap:26px}.af-card{padding:26px}.af-side-column .af-card{padding:24px}.af-editor textarea,.af-inline-preview{height:280px}}
 @media(max-width:1150px){.af-layout{grid-template-columns:minmax(0,1.8fr) minmax(240px,1fr);gap:17px}.af-card{padding:20px}.af-side-column .af-card{padding:19px}.af-page-actions .btn{font-size:10px;padding-inline:10px}.af-file-row{grid-template-columns:20px minmax(0,1fr) 63px 72px 20px;gap:6px}.af-file-select{font-size:8px;padding:5px 2px}.af-file-info strong{font-size:10px}.af-file-info>span{font-size:8px}.af-platform-choices{gap:7px}.af-platform-choices label{padding:9px 10px;font-size:9px;gap:6px}}
 @media(max-width:950px){.af-layout{grid-template-columns:minmax(0,1fr)}.af-side-column{display:grid;grid-template-columns:1fr 1fr;gap:17px;align-items:start}.af-side-note{grid-column:1/-1}.af-page-heading{gap:18px}.af-page-heading h1{font-size:25px}.af-card{padding:23px}.af-file-row{grid-template-columns:24px minmax(0,1fr) 80px 98px 24px;gap:9px}.af-file-select{font-size:10px;padding:5px}.af-file-info strong{font-size:11px}.af-file-info>span{font-size:9px}.af-side-column .af-card{padding:22px}.af-project-preview-panel .af-summary-label{padding-inline:0}.af-side-column .af-project-preview-panel{padding-inline:17px}}

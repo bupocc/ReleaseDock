@@ -2,7 +2,7 @@ import { icon, logo } from './icons.js';
 import { api, ApiError, escapeHtml } from './api.js';
 
 const adminPages = new Set(['overview', 'projects', 'releases', 'publish', 'project-edit', 'files', 'settings']);
-const publicPages = new Set(['home', 'project', 'login', 'activity']);
+const publicPages = new Set(['home', 'catalog', 'project', 'login', 'activity']);
 const params = new URLSearchParams(location.search);
 const page = params.get('page') || 'home';
 let site = { name: 'ReleaseDock', description: '', announcement: '' };
@@ -31,11 +31,13 @@ export function safeNext(value) {
 
 export function header(active = 'home') {
   const name = escapeHtml(site.name);
-  return `<header class="site-header"><div class="container header-inner"><a class="brand" href="${url('home')}" aria-label="${name} 首页">${logo()}<span class="brand-name">${name}</span></a><nav class="header-nav" aria-label="主导航"><a class="${active === 'home' ? 'active' : ''}" ${active === 'home' ? 'aria-current="page"' : ''} href="${url('home')}">全部项目</a><a class="${active === 'activity' ? 'active' : ''}" ${active === 'activity' ? 'aria-current="page"' : ''} href="${url('activity')}">更新动态</a></nav><div class="header-right"><span class="header-note"><span class="status-dot"></span>每一次更新，都在这里</span><a class="btn btn-light" href="${url('login')}">${icon('key', 14)}管理入口</a></div></div></header><nav class="public-mobile-nav" aria-label="移动主导航"><a class="${active === 'home' ? 'active' : ''}" href="${url('home')}">全部项目</a><a class="${active === 'activity' ? 'active' : ''}" href="${url('activity')}">更新动态</a></nav>`;
+  const catalogActive = active === 'catalog' || active === 'project';
+  const activityActive = active === 'home' || active === 'activity';
+  return `<header class="site-header"><div class="container header-inner"><a class="brand" href="${url('home')}" aria-label="${name} 首页">${logo()}<span class="brand-name">${name}</span></a><nav class="header-nav" aria-label="主导航"><a class="${catalogActive ? 'active' : ''}" ${catalogActive ? 'aria-current="page"' : ''} href="${url('catalog')}">全部项目</a><a class="${activityActive ? 'active' : ''}" ${activityActive ? 'aria-current="page"' : ''} href="${url('home')}">更新动态</a></nav><div class="header-right"><span class="header-note"><span class="status-dot"></span>每一次更新，都在这里</span></div></div></header><nav class="public-mobile-nav" aria-label="移动主导航"><a class="${catalogActive ? 'active' : ''}" ${catalogActive ? 'aria-current="page"' : ''} href="${url('catalog')}">全部项目</a><a class="${activityActive ? 'active' : ''}" ${activityActive ? 'aria-current="page"' : ''} href="${url('home')}">更新动态</a></nav>`;
 }
 
 export function footer() {
-  return `<footer class="site-footer"><div class="footer-brand">${icon('layers', 14)}<span>© ${new Date().getFullYear()} ${escapeHtml(site.name)}<span class="desktop-only"> · 简单发布，安心获取</span></span></div><div class="footer-links"><a href="${url('activity')}">更新动态</a><a href="${url('login')}">管理员入口 ${icon('diagonal', 11)}</a></div></footer>`;
+  return `<footer class="site-footer"><div class="footer-brand">${icon('layers', 14)}<span>© ${new Date().getFullYear()} ${escapeHtml(site.name)}<span class="desktop-only"> · 简单发布，安心获取</span></span></div><div class="footer-links"><a href="${url('home')}">更新动态</a><a href="${url('login')}">管理员入口 ${icon('diagonal', 11)}</a></div></footer>`;
 }
 
 export function platformIcon(platform) {
@@ -65,7 +67,7 @@ function loginRedirect() {
 window.addEventListener('session-expired', loginRedirect);
 
 async function loadData() {
-  if (page === 'home') {
+  if (page === 'catalog') {
     const [catalog, latest] = await Promise.all([api('/api/projects'), api('/api/releases?limit=1')]);
     site = { ...site, ...catalog.site };
     return { projects: catalog.projects || [], latestRelease: latest.releases?.[0] || null, site };
@@ -94,7 +96,7 @@ async function loadData() {
     const detail = selected ? await api(`/api/releases/${encodeURIComponent(selected.id)}`) : { release: null, assets: [] };
     return { ...result, releases, release: detail.release, assets: detail.assets || [], site };
   }
-  if (page === 'activity') return { ...await api('/api/releases?limit=100'), site };
+  if (page === 'home' || page === 'activity') return { ...await api('/api/releases?limit=100'), site };
   if (page === 'overview') return { ...await api('/api/admin/overview'), site };
   if (page === 'projects') return { ...await api('/api/admin/projects'), site };
   if (page === 'releases') {
@@ -125,7 +127,7 @@ function showError(error) {
   if (error.status === 401 && adminPages.has(page)) { loginRedirect(); return; }
   const missing = error.status === 404;
   document.title = `${missing ? '内容暂不可用' : '加载失败'} · ${site.name}`;
-  document.querySelector('#app').innerHTML = `${header()}<main class="container error-page" id="main-content"><span class="state-icon">${icon(missing ? 'box' : 'info', 30)}</span><div class="eyebrow">${missing ? 'CONTENT UNAVAILABLE' : 'PLEASE TRY AGAIN'}</div><h1>${missing ? '暂时找不到这条内容' : '页面暂时无法加载'}</h1><p>${escapeHtml(error.message || '请检查网络连接后重试。')}</p><div class="state-actions">${missing ? '' : '<button class="btn btn-primary" id="retry-page">重新加载</button>'}${page === 'project' && params.get('slug') ? `<a class="btn btn-light" href="${url('project', { slug: params.get('slug') })}">返回项目</a>` : ''}<a class="btn btn-light" href="${url(adminPages.has(page) ? 'overview' : 'home')}">${adminPages.has(page) ? '返回管理概览' : '返回项目首页'}</a></div></main>`;
+  document.querySelector('#app').innerHTML = `${header(page)}<main class="container error-page" id="main-content"><span class="state-icon">${icon(missing ? 'box' : 'info', 30)}</span><div class="eyebrow">${missing ? 'CONTENT UNAVAILABLE' : 'PLEASE TRY AGAIN'}</div><h1>${missing ? '暂时找不到这条内容' : '页面暂时无法加载'}</h1><p>${escapeHtml(error.message || '请检查网络连接后重试。')}</p><div class="state-actions">${missing ? '' : '<button class="btn btn-primary" id="retry-page">重新加载</button>'}${page === 'project' && params.get('slug') ? `<a class="btn btn-light" href="${url('project', { slug: params.get('slug') })}">返回项目</a>` : ''}<a class="btn btn-light" href="${url(adminPages.has(page) ? 'overview' : 'home')}">${adminPages.has(page) ? '返回管理概览' : '返回首页'}</a></div></main>`;
   document.querySelector('#retry-page')?.addEventListener('click', () => location.reload());
 }
 

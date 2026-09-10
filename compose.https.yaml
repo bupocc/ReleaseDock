@@ -1,0 +1,28 @@
+services:
+  app:
+    environment:
+      COOKIE_SECURE: "true"
+      PUBLIC_URL: https://${DOMAIN:?请先在 .env 中填写 DOMAIN}
+      TRUST_PROXY: "1"
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?请先在 .env 中填写 DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  caddy_data:
+  caddy_config:

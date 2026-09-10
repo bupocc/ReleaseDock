@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+.data
+.pnpm-store
+node_modules
+design
+tests
+test-results
+playwright-report
+docs
+*.log
+README.md

@@ -1,0 +1,25 @@
+{
+  "name": "releasedock",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "可自托管的软件项目与版本发布中心",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test --test-timeout=60000 tests/*.test.mjs",
+    "preview:design": "node design/serve.mjs",
+    "design:render": "node design/render.mjs",
+    "design:export": "node design/export.mjs",
+    "test:ui": "node scripts/check-ui.mjs",
+    "key:generate": "node scripts/generate-key.mjs"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/multipart": "^9.2.1",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/static": "^8.2.0",
+    "fastify": "^5.6.0"
+  }
+}

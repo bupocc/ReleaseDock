@@ -1,0 +1,33 @@
+[
+  {
+    "page": "project-edit",
+    "file": "06-project-settings",
+    "title": "项目配置 · ReleaseDock",
+    "width": 1440,
+    "height": 1193,
+    "overflow": false,
+    "textLength": 647,
+    "errors": []
+  },
+  {
+    "page": "publish",
+    "file": "07-release-editor",
+    "title": "发布新版本 · ReleaseDock",
+    "width": 1440,
+    "height": 1625,
+    "overflow": false,
+    "textLength": 1045,
+    "errors": []
+  },
+  {
+    "page": "home",
+    "file": "08-mobile-home",
+    "title": "ReleaseDock · 软件发布中心",
+    "width": 390,
+    "height": 2317,
+    "mobile": true,
+    "overflow": false,
+    "textLength": 745,
+    "errors": []
+  }
+]

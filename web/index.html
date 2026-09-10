@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f8f4" />
+    <meta name="description" content="查看软件项目、阅读版本更新并下载安装包。" />
+    <title>ReleaseDock · 软件发布中心</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/admin.css" />
+    <link rel="stylesheet" href="/assets/admin-forms.css" />
+    <script defer src="/assets/boot.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳转到主要内容</a>
+    <div id="app" data-booting="true">
+      <main class="loading-screen" id="main-content" aria-busy="true">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <h1>ReleaseDock</h1>
+        <p>正在加载发布中心…</p>
+        <a class="link-button" href="/">重新加载</a>
+      </main>
+    </div>
+    <noscript><p class="noscript-notice">请启用浏览器 JavaScript，以查看软件项目、版本与下载文件。</p></noscript>
+    <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

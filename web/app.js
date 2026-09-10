@@ -68,9 +68,9 @@ window.addEventListener('session-expired', loginRedirect);
 
 async function loadData() {
   if (page === 'catalog') {
-    const [catalog, latest] = await Promise.all([api('/api/projects'), api('/api/releases?limit=1')]);
+    const catalog = await api('/api/projects');
     site = { ...site, ...catalog.site };
-    return { projects: catalog.projects || [], latestRelease: latest.releases?.[0] || null, site };
+    return { projects: catalog.projects || [], site };
   }
   const siteRequest = api('/api/site');
   if (adminPages.has(page) || page === 'login') {

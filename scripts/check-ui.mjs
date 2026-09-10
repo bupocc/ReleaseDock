@@ -31,6 +31,17 @@ async function visit(target) {
   assert.equal(await page.locator('.error-page').count(),0,await page.locator('body').innerText());
 }
 async function renameAsset(id,filename) {
+  const inline=page.locator(`[data-af-asset-filename="${id}"]`);
+  if(await inline.count()) {
+    await inline.fill(filename);
+    const saved=page.waitForResponse(response=>response.url().endsWith(`/api/admin/assets/${id}`)&&response.request().method()==='PATCH');
+    await inline.press('Enter');
+    const response=await saved;
+    assert.equal(response.status(),200,await response.text());
+    const updated=(await response.json()).asset;
+    await page.waitForFunction(({id,filename})=>{const input=document.querySelector(`[data-af-asset-filename="${id}"]`);return input&&!input.disabled&&input.value===filename;},{id,filename:updated.filename});
+    return updated;
+  }
   await page.locator(`[data-asset-rename="${id}"]`).click();
   await page.locator('#asset-rename-filename').fill(filename);
   const saved=page.waitForResponse(response=>response.url().endsWith(`/api/admin/assets/${id}`)&&response.request().method()==='PATCH');
@@ -42,6 +53,12 @@ async function renameAsset(id,filename) {
   await page.waitForFunction(({id,filename})=>[...document.querySelectorAll('[data-asset-rename]')].some(button=>button.dataset.assetRename===id&&button.getAttribute('aria-label')===`重命名 ${filename}`),{id,filename:updated.filename});
   return updated;
 }
+async function adminRequest(method,route,body) {
+  const {csrfToken}=await (await context.request.get(`${base}/api/session`)).json();
+  const response=await context.request.fetch(`${base}${route}`,{method,headers:{'X-CSRF-Token':csrfToken},data:body});
+  assert.ok(response.ok(),await response.text());
+  return response.json();
+}
 try {
   await visit('');
   assert.ok((await page.locator('body').innerText()).length>100);
@@ -52,6 +69,9 @@ try {
   await page.waitForSelector('html[data-ready="true"]');
   assert.equal(await page.locator('.error-page').count(),0);
   assert.equal(await page.locator('#project-search').isVisible(),true);
+  assert.equal(await page.locator('[data-carousel-empty]').count(),1);
+  assert.equal(await page.locator('[data-carousel-slide], [data-carousel-next]').count(),0);
+  assert.ok(!(await page.locator('body').innerText()).includes('A HOME FOR EVERY RELEASE'));
   await page.screenshot({path:path.join(output,'production-catalog-empty.png'),fullPage:true});
   checkpoint('首页保留更新动态，导航可打开全部项目，空站点无加载错误');
 
@@ -79,6 +99,12 @@ try {
 
   await page.goto(`${base}/?page=overview`,{waitUntil:'networkidle'});
   await page.waitForURL(/page=login/);
+  await page.waitForSelector('#admin-key');
+  const loginText=await page.locator('#login-form').innerText();
+  assert.ok(!loginText.includes('仅供站点管理员使用'));
+  assert.ok(await page.locator('label[for="admin-key"]').evaluate(node=>{const bounds=node.getBoundingClientRect();return bounds.width<=1&&bounds.height<=1;}));
+  assert.ok(await page.locator('#admin-key').getAttribute('aria-label')||await page.locator('label[for="admin-key"]').count());
+  await page.screenshot({path:path.join(output,'production-login.png'),fullPage:true});
   await page.locator('#admin-key').fill(adminKey);
   await page.locator('#login-form button[type="submit"]').click();
   await page.waitForURL(/page=overview/);
@@ -91,46 +117,116 @@ try {
   await page.locator('#af-project-slug').fill('acceptance-demo');
   await page.locator('#af-project-summary').fill('验证软件发布与公开下载的临时项目');
   await page.locator('#af-project-description').fill('仅用于浏览器验收，不写入正式站点数据。');
-  await page.locator('input[name="platforms"][value="Windows"]').check();
-  await page.locator('input[name="platforms"][value="macOS"]').check();
+  for(const platform of ['Windows','macOS']) {
+    const input=page.locator(`input[name="platforms"][value="${platform}"]`);
+    await input.focus();
+    if(!await input.isChecked()) await input.press('Space');
+    assert.equal(await input.isChecked(),true);
+    assert.ok(await input.evaluate(node=>{const style=getComputedStyle(node);return style.opacity==='0'||style.clipPath!=='none';}));
+  }
   const savedProject=page.waitForResponse(response=>response.url().endsWith('/api/admin/projects')&&response.request().method()==='POST');
   await page.locator('#af-project-form button[type="submit"]').click();
   const projectResponse=await savedProject;
   assert.equal(projectResponse.status(),201,await projectResponse.text());
   const project=(await projectResponse.json()).project;
   await page.waitForURL(/page=project-edit.*id=/);
-  checkpoint('项目表单成功创建并保存真实项目');
+  assert.deepEqual(project.platforms.sort(),['Windows','macOS'].sort());
+  checkpoint('平台标签隐藏复选框并支持键盘选择，项目表单保存真实数据');
+
+  const hiddenProject=(await adminRequest('POST','/api/admin/projects',{name:'备用隐藏项目',slug:'hidden-browser-project',subtitle:'仅用于检查项目选择',platforms:['Linux'],isPublic:false})).project;
 
   await visit(`?page=publish&project=${project.id}`);
-  await page.locator('#af-release-version').fill('1.0.0');
+  const projectSelect=page.locator('[data-select-for="af-release-project"] [role="combobox"]');
+  await projectSelect.press('ArrowDown');
+  assert.equal(await projectSelect.getAttribute('aria-expanded'),'true');
+  await page.screenshot({path:path.join(output,'production-project-select.png'),fullPage:true,animations:'disabled'});
+  const options=await page.locator('#af-release-project option').evaluateAll(nodes=>nodes.map(node=>node.value));
+  await projectSelect.press('End');
+  await projectSelect.press('Enter');
+  assert.equal(await page.locator('#af-release-project').inputValue(),options.at(-1));
+  await projectSelect.press('Home');
+  await projectSelect.press('Tab');
+  assert.equal(await page.locator('#af-release-project').inputValue(),options[0]);
+  await projectSelect.click();
+  await page.getByRole('option',{name:'备用隐藏项目',exact:true}).click();
+  assert.equal(await page.locator('#af-release-project').inputValue(),hiddenProject.id);
+  await projectSelect.click();
+  await page.getByRole('option',{name:'验收项目',exact:true}).click();
+  await projectSelect.press('ArrowDown');
+  await projectSelect.press('End');
+  await projectSelect.press('Escape');
+  assert.equal(await page.locator('#af-release-project').inputValue(),project.id);
+  await projectSelect.click();
+  await page.locator('#af-release-title').click();
+  assert.equal(await projectSelect.getAttribute('aria-expanded'),'false');
+  checkpoint('项目下拉使用自定义列表，方向键、Home/End、回车、Tab、Escape 和点击外部均正常');
+  await page.locator('#af-release-version').fill('1.5.0.1');
   await page.locator('#af-release-title').fill('第一个可下载的正式版本');
   const releaseNotes='## 新增功能\n- 支持软件版本发布与下载。\n\n> 升级前请阅读 **注意事项**。\n> 查看 [使用文档](https://example.com/releases_(stable)?lang=zh&from=notes)。\n\n<script>window.__release_xss = true</script>';
   await page.locator('#af-release-notes').fill(releaseNotes);
   const packageBytes=Buffer.from('ReleaseDock browser acceptance package.\n');
+  await page.locator('#af-package-input').setInputFiles([{name:'acceptance-original.txt',mimeType:'text/plain',buffer:packageBytes},{name:'second-package.txt',mimeType:'text/plain',buffer:Buffer.from('Second package for independent filename edits.')}]);
+  const pendingFilename=page.locator('[data-af-pending-filename]').first();
+  await pendingFilename.waitFor();
+  assert.equal(await page.locator('[data-af-asset]').count(),0);
+  const uploadFilename='上传前改名 1.5.0.1.txt';
+  await pendingFilename.fill(uploadFilename);
+  for(const attribute of ['data-af-pending-platform','data-af-pending-arch']) {
+    const select=page.locator(`[${attribute}]`).first();
+    const trigger=select.locator('..').getByRole('combobox');
+    const key=await select.getAttribute(attribute);
+    await trigger.press('End');
+    await trigger.press('Enter');
+    await page.waitForFunction(({attribute,key})=>document.activeElement?.parentElement.querySelector('select')?.getAttribute(attribute)===key,{attribute,key});
+    await trigger.press('Home');
+    await trigger.press('Enter');
+    assert.equal(await pendingFilename.inputValue(),uploadFilename);
+  }
   const uploaded=page.waitForResponse(response=>/\/api\/admin\/releases\/[^/]+\/assets\?/.test(response.url())&&response.request().method()==='POST');
-  await page.locator('#af-package-input').setInputFiles({name:'acceptance-1.0.0.txt',mimeType:'text/plain',buffer:packageBytes});
+  await page.locator('#af-upload-pending').click();
   const uploadResponse=await uploaded;
   assert.equal(uploadResponse.status(),201,await uploadResponse.text());
   const asset=(await uploadResponse.json()).asset;
-  await page.waitForSelector('[data-af-asset]');
+  assert.equal(asset.filename,uploadFilename);
+  await page.waitForFunction(()=>document.querySelectorAll('[data-af-asset]').length===2&&document.querySelector('#af-publish-form').getAttribute('aria-busy')==='false');
+  assert.equal(await projectSelect.isDisabled(),true);
+  const createdDetail=(await (await context.request.get(`${base}/api/admin/releases/${asset.releaseId}`)).json());
+  const createdRelease=createdDetail.release;
+  const secondAsset=createdDetail.assets.find(item=>item.id!==asset.id);
+  assert.equal(createdRelease.version,'1.5.0.1');
+  checkpoint('四段版本号保存成功，文件先在列表原位改名再上传，建草稿后项目选择保持锁定');
   const unsavedTitle='第一个可下载的正式版本（已核验）';
   await page.locator('#af-release-title').fill(unsavedTitle);
-  await page.locator(`[data-asset-rename="${asset.id}"]`).click();
-  assert.equal(await page.locator('#asset-rename-filename').inputValue(),asset.filename);
-  await page.locator('#asset-rename-filename').fill('取消后的名称.txt');
-  await page.locator('#asset-rename-form [data-asset-rename-cancel]').click();
+  for(const attribute of ['data-af-asset-platform','data-af-asset-arch']) {
+    const trigger=page.locator(`[${attribute}="${asset.id}"]`).locator('..').getByRole('combobox');
+    for(const key of ['End','Home']) {
+      const saved=page.waitForResponse(response=>response.url().endsWith(`/api/admin/assets/${asset.id}`)&&response.request().method()==='PATCH');
+      await trigger.press(key);
+      await trigger.press('Enter');
+      assert.equal((await saved).status(),200);
+      await page.waitForFunction(({attribute,id})=>document.querySelector('#af-publish-form').getAttribute('aria-busy')==='false'&&document.activeElement?.parentElement.querySelector('select')?.getAttribute(attribute)===id,{attribute,id:asset.id});
+    }
+  }
+  assert.ok(await page.locator(`[data-af-asset-platform="${asset.id}"]`).locator('..').locator('.select-value').evaluate(node=>node.scrollWidth<=node.clientWidth));
+  checkpoint('待上传及已上传文件的下拉选项保存后保持键盘焦点，Windows 平台名完整显示');
+  await page.locator(`[data-af-asset-filename="${asset.id}"]`).fill('取消后的名称.txt');
+  await page.locator(`[data-af-cancel-filename="${asset.id}"]`).click();
+  assert.equal(await page.locator(`[data-af-asset-filename="${asset.id}"]`).inputValue(),asset.filename);
   assert.equal((await (await context.request.get(`${base}/api/admin/releases/${asset.releaseId}`)).json()).assets[0].filename,asset.filename);
-  const draftFilename='验收安装包 1.0.0.txt';
+  const draftFilename='验收安装包 1.5.0.1.txt';
+  await page.locator(`[data-af-asset-filename="${secondAsset.id}"]`).fill('第二个文件尚未保存.txt');
   const renamedDraft=await renameAsset(asset.id,draftFilename);
   assert.equal(renamedDraft.filename,draftFilename);
   assert.equal(renamedDraft.sha256,asset.sha256);
   assert.equal(await page.locator('#af-release-title').inputValue(),unsavedTitle);
   assert.equal(await page.locator('#af-release-notes').inputValue(),releaseNotes);
-  assert.ok((await page.locator(`[data-af-asset="${asset.id}"]`).innerText()).includes(draftFilename));
+  assert.equal(await page.locator(`[data-af-asset-filename="${asset.id}"]`).inputValue(),draftFilename);
+  assert.equal(await page.locator(`[data-af-asset-filename="${secondAsset.id}"]`).inputValue(),'第二个文件尚未保存.txt');
+  await page.locator(`[data-af-cancel-filename="${secondAsset.id}"]`).click();
   await page.locator('[data-af-editor-tab="preview"]').click();
   assert.equal(await page.locator('#af-notes-preview-panel blockquote strong').innerText(),'注意事项');
   assert.equal(await page.locator('#af-notes-preview-panel blockquote a').getAttribute('href'),'https://example.com/releases_(stable)?lang=zh&from=notes');
-  checkpoint('草稿附件可取消或回车保存新名称，更新日志及校验值保留，编辑器引用和链接预览正确');
+  checkpoint('已上传附件可原位取消或回车保存新名称，未保存日志及校验值保留，Markdown 预览正确');
   await page.screenshot({path:path.join(output,'production-release-editor.png'),fullPage:true});
   const anonymous=await browser.newContext({viewport:{width:1440,height:1100},acceptDownloads:true});
   const draftDownload=await anonymous.request.get(`${base}/api/downloads/${asset.id}`);
@@ -184,23 +280,52 @@ try {
   for(const target of ['?page=overview','?page=projects','?page=releases','?page=files','?page=settings',`?page=publish&id=${asset.releaseId}`]) {
     await visit(target);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`页面横向溢出：${target}`);
+    if(target==='?page=overview'||target==='?page=releases') {
+      assert.equal(await page.locator(`a[href="?page=publish&id=${asset.releaseId}"]`).innerText(),'编辑');
+    }
   }
-  checkpoint('后台概览、项目、版本、文件、设置与只读版本页均可打开');
-  const lockedFilename='已发布安装包 1.0.0.txt';
+  checkpoint('后台概览、项目、版本、文件、设置与版本编辑页均可打开');
+  const publishedBefore=(await (await context.request.get(`${base}/api/admin/releases/${asset.releaseId}`)).json()).release;
+  const editedTitle='正式发布后修订的说明';
+  const editedNotes=releaseNotes+'\n\n修订：补充四段版本的升级步骤。';
+  await page.locator('#af-release-version').fill('1.5.0.2');
+  await page.locator('#af-release-title').fill(editedTitle);
+  await page.locator('[data-af-editor-tab="edit"]').click();
+  await page.locator('#af-release-notes').fill(editedNotes);
+  await page.locator('input[name="channel"][value="prerelease"]').check();
+  assert.equal(await page.locator('#af-latest').isDisabled(),true);
+  assert.equal(await page.locator('#af-latest').isChecked(),false);
+  const metadataSaved=page.waitForResponse(response=>response.url().endsWith(`/api/admin/releases/${asset.releaseId}`)&&response.request().method()==='PATCH');
+  await page.locator('#af-save-draft').click();
+  const metadataResponse=await metadataSaved;
+  assert.equal(metadataResponse.status(),200,await metadataResponse.text());
+  const publishedAfter=(await metadataResponse.json()).release;
+  assert.equal(publishedAfter.version,'1.5.0.2');
+  assert.equal(publishedAfter.status,'published');
+  assert.equal(publishedAfter.publishedAt,publishedBefore.publishedAt);
+  assert.equal(publishedAfter.channel,'prerelease');
+  assert.equal(publishedAfter.isLatest,false);
+  await publicPage.reload({waitUntil:'networkidle'});
+  await publicPage.waitForSelector('html[data-ready="true"]');
+  assert.ok((await publicPage.locator('body').innerText()).includes(editedTitle));
+  assert.ok((await publicPage.locator('.notes-content').innerText()).includes('补充四段版本的升级步骤'));
+  await page.screenshot({path:path.join(output,'production-published-editor.png'),fullPage:true});
+  checkpoint('概览和列表可进入编辑，已发布版本号、标题、日志及渠道可保存，最新稳定标记同步，发布时间与状态不变');
+  const lockedFilename='已发布安装包 1.5.0.2.txt';
   await renameAsset(asset.id,lockedFilename);
   assert.equal(await page.locator(`[data-af-asset-platform="${asset.id}"]`).isDisabled(),true);
-  assert.ok((await page.locator(`[data-af-asset="${asset.id}"]`).innerText()).includes(lockedFilename));
+  assert.equal(await page.locator(`[data-af-asset-platform="${asset.id}"]`).locator('..').getByRole('combobox').isDisabled(),true);
+  assert.equal(await page.locator(`[data-af-asset-filename="${asset.id}"]`).inputValue(),lockedFilename);
   await page.setViewportSize({width:390,height:844});
-  await page.locator(`[data-asset-rename="${asset.id}"]`).click();
-  await page.locator('#asset-rename-filename').fill('../非法文件.txt');
-  await page.locator('[data-asset-rename-save]').click();
-  await page.locator('[data-asset-rename-error]').filter({hasText:/名称|路径|包含/}).waitFor();
+  await page.locator(`[data-af-asset-filename="${asset.id}"]`).fill('../非法文件.txt');
+  await page.locator(`[data-af-save-filename="${asset.id}"]`).click();
+  await page.locator('.af-filename-error').filter({hasText:/名称|路径|包含/}).first().waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await page.screenshot({path:path.join(output,'production-mobile-rename.png'),fullPage:true});
-  await page.keyboard.press('Escape');
-  await page.locator('#asset-rename-dialog').waitFor({state:'hidden'});
+  await page.locator(`[data-af-asset-filename="${asset.id}"]`).press('Escape');
+  assert.equal(await page.locator(`[data-af-asset-filename="${asset.id}"]`).inputValue(),lockedFilename);
   await page.setViewportSize({width:1440,height:1000});
-  checkpoint('已发布版本页可单独改名，其他附件字段锁定；手机弹窗可校验非法名并通过 Escape 取消');
+  checkpoint('已发布附件平台和架构锁定且自定义控件同步禁用，手机原位改名校验非法名称并支持 Escape 取消');
   await publicPage.setViewportSize({width:390,height:844});
   await publicPage.goto(`${base}/`,{waitUntil:'networkidle'});
   await publicPage.waitForSelector('html[data-ready="true"]');
@@ -211,6 +336,8 @@ try {
   await publicPage.waitForSelector('html[data-ready="true"]');
   await publicPage.locator('#project-search').fill('验收项目');
   assert.equal(await publicPage.locator('.project-card').count(),1);
+  assert.equal(await publicPage.locator('[data-carousel-slide]').count(),1);
+  assert.equal(await publicPage.locator('[data-carousel-next]').count(),0);
   assert.equal(await publicPage.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   checkpoint('390px 手机首页、项目目录和搜索正常，无横向溢出');
   await anonymous.close();
@@ -224,8 +351,14 @@ try {
   assert.equal((await app.inject({url:`/api/downloads/${asset.id}`})).statusCode,404);
   await visit(`?page=publish&id=${asset.releaseId}`);
   assert.equal((await renameAsset(asset.id,'下架归档安装包.txt')).filename,'下架归档安装包.txt');
+  await page.locator('#af-release-title').fill('下架后补充的归档说明');
+  const withdrawnSaved=page.waitForResponse(response=>response.url().endsWith(`/api/admin/releases/${asset.releaseId}`)&&response.request().method()==='PATCH');
+  await page.locator('#af-save-draft').click();
+  const withdrawnResponse=await withdrawnSaved;
+  assert.equal(withdrawnResponse.status(),200);
+  assert.equal((await withdrawnResponse.json()).release.status,'withdrawn');
   assert.equal((await app.inject({url:`/api/downloads/${asset.id}`})).statusCode,404);
-  checkpoint('下架关闭公开下载，附件仍可改名且不会重新公开');
+  checkpoint('下架后可修改归档信息及附件名，保存不会重新公开下载');
 
   await page.locator('[data-logout]:visible').first().click();
   await page.waitForURL(/page=login/);

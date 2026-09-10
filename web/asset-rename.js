@@ -7,7 +7,7 @@ export function assetRenameButton(asset, className = '', disabled = false) {
   return `<button type="button" class="asset-rename-trigger ${escapeHtml(className)}" data-asset-rename="${escapeHtml(asset.id)}" aria-label="重命名 ${escapeHtml(asset.filename)}" title="重命名 ${escapeHtml(asset.filename)}"${disabled ? ' disabled' : ''}>${icon('edit', 13)}<span>重命名</span></button>`;
 }
 
-function filenameError(value) {
+export function filenameError(value) {
   if (Array.from(value).some(character => { const point = character.codePointAt(0); return point >= 0xD800 && point <= 0xDFFF; })) return '文件名包含无法识别的字符，请移除后重试。';
   const name = value.normalize('NFC');
   if (!name.trim()) return '请输入完整文件名，包括扩展名。';

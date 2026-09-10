@@ -10,7 +10,7 @@ import { openDatabase,transaction,audit } from './db.js';
 import { registerAuth } from './auth.js';
 import { registerFiles } from './files.js';
 import { projectJson,releaseJson,assetJson,releaseDetail,siteJson,apiError } from './store.js';
-import { projectSchema,projectPatchSchema,releaseSchema,releasePatchSchema,siteSchema,objectSchema,validateWebsite,validSemver } from './schemas.js';
+import { projectSchema,projectPatchSchema,releaseSchema,releasePatchSchema,siteSchema,objectSchema,validateWebsite,validVersion } from './schemas.js';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const now=()=>new Date().toISOString();
@@ -65,7 +65,23 @@ export async function buildApp(options={}) {
 
   app.get('/healthz',async()=>({ok:db.prepare('SELECT 1 AS ok').get().ok===1}));
   app.get('/api/site',async()=>({site:siteJson(db)}));
-  app.get('/api/projects',async()=>({projects:db.prepare('SELECT * FROM projects WHERE is_public=1 ORDER BY updated_at DESC').all().map(row=>projectJson(db,row)),site:siteJson(db)}));
+  app.get('/api/projects',async()=>{
+    const rows=db.prepare(`
+      SELECT p.*,r.id AS latest_release_id,r.version AS latest_release_version,
+        r.title AS latest_release_title,substr(r.notes,1,1000) AS latest_release_notes,
+        length(r.notes)>1000 AS latest_release_notes_truncated,
+        r.channel AS latest_release_channel,r.published_at AS latest_release_published_at
+      FROM projects p LEFT JOIN releases r ON r.id=(
+        SELECT id FROM releases WHERE project_id=p.id AND status='published'
+        ORDER BY published_at DESC,created_at DESC,id DESC LIMIT 1
+      ) WHERE p.is_public=1 ORDER BY p.updated_at DESC
+    `).all();
+    return {projects:rows.map(row=>({
+      ...projectJson(db,row),
+      // 目录仅携带轮播所需的日志摘要，完整内容由版本详情接口提供。
+      latestRelease:row.latest_release_id?{id:row.latest_release_id,version:row.latest_release_version,title:row.latest_release_title,notes:row.latest_release_notes,channel:row.latest_release_channel,publishedAt:row.latest_release_published_at,notesTruncated:!!row.latest_release_notes_truncated}:null,
+    })),site:siteJson(db)};
+  });
   app.get('/api/projects/:slug',async request=>{
     const row=getPublicProject(request.params.slug);
     return {project:projectJson(db,row),releases:db.prepare("SELECT * FROM releases WHERE project_id=? AND status='published' ORDER BY is_latest DESC,published_at DESC").all(row.id).map(item=>releaseJson(db,item))};
@@ -114,8 +130,7 @@ export async function buildApp(options={}) {
   app.post('/api/admin/releases',{schema:{body:releaseSchema}},async(request,reply)=>{
     const body={notes:'',...request.body};
     requireProject(body.projectId);
-    if(!validSemver(body.version))throw apiError(400,'INVALID_VERSION','请输入有效的版本号，例如 1.2.0 或 1.3.0-beta.1');
-    if(body.channel==='stable'&&body.version.split('+')[0].includes('-'))throw apiError(400,'CHANNEL_MISMATCH','带预发布后缀的版本必须选择预发布渠道');
+    if(!validVersion(body.version))throw apiError(400,'INVALID_VERSION','版本号须为 1–100 个字符，以字母或数字开头，可包含字母、数字及 . _ + -，例如 1.5.0.1 或 nightly');
     if(!body.title.trim())throw apiError(400,'TITLE_REQUIRED','请填写版本标题');
     const id=randomUUID(),time=now();
     db.prepare('INSERT INTO releases(id,project_id,version,title,notes,channel,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(id,body.projectId,body.version,body.title.trim(),body.notes,body.channel,time,time);
@@ -123,15 +138,27 @@ export async function buildApp(options={}) {
     reply.code(201);return releaseDetail(db,id);
   });
   app.patch('/api/admin/releases/:id',{schema:{body:releasePatchSchema}},async request=>{
-    const row=requireRelease(request.params.id);
-    if(row.status!=='draft')throw apiError(409,'RELEASE_IMMUTABLE','正式发布后的版本不可修改，请创建新版本');
-    const body={...releaseJson(db,row),...request.body};
-    if(!validSemver(body.version))throw apiError(400,'INVALID_VERSION','请输入有效的语义版本号');
-    if(body.channel==='stable'&&body.version.split('+')[0].includes('-'))throw apiError(400,'CHANNEL_MISMATCH','带预发布后缀的版本必须选择预发布渠道');
-    if(!body.title.trim())throw apiError(400,'TITLE_REQUIRED','请填写版本标题');
-    db.prepare('UPDATE releases SET version=?,title=?,notes=?,channel=?,updated_at=? WHERE id=?').run(body.version,body.title.trim(),body.notes,body.channel,now(),row.id);
-    audit(db,'release.update',row.id);
-    return releaseDetail(db,row.id);
+    return transaction(db,()=>{
+      const row=requireRelease(request.params.id);
+      const body={version:row.version,title:row.title,notes:row.notes,channel:row.channel,...request.body};
+      if(!validVersion(body.version))throw apiError(400,'INVALID_VERSION','版本号须为 1–100 个字符，以字母或数字开头，可包含字母、数字及 . _ + -，例如 1.5.0.1 或 nightly');
+      if(!body.title.trim())throw apiError(400,'TITLE_REQUIRED','请填写版本标题');
+      if(row.status==='published'&&!body.notes.trim())throw apiError(400,'NOTES_REQUIRED','已发布版本的更新日志不能为空');
+      if(body.setLatest===true&&row.status!=='published')throw apiError(400,'LATEST_REQUIRES_PUBLISHED','只有已发布的稳定版可以设置为最新版本');
+      if(body.setLatest===true&&body.channel!=='stable')throw apiError(400,'LATEST_MUST_BE_STABLE','只有稳定版可以设置为最新版本');
+      const latest=row.status==='published'&&body.channel==='stable'&&(body.setLatest??!!row.is_latest);
+      const time=now();
+      // 在同一事务中交接最新标记，冲突或校验失败时全部回滚。
+      if(latest)db.prepare('UPDATE releases SET is_latest=0,updated_at=? WHERE project_id=? AND id<>? AND is_latest=1').run(time,row.project_id,row.id);
+      db.prepare('UPDATE releases SET version=?,title=?,notes=?,channel=?,is_latest=?,updated_at=? WHERE id=?').run(body.version,body.title.trim(),body.notes,body.channel,latest?1:0,time,row.id);
+      if(row.is_latest&&!latest) {
+        const fallback=db.prepare("SELECT id FROM releases WHERE project_id=? AND id<>? AND status='published' AND channel='stable' ORDER BY published_at DESC,created_at DESC,id DESC LIMIT 1").get(row.project_id,row.id);
+        if(fallback)db.prepare('UPDATE releases SET is_latest=1,updated_at=? WHERE id=?').run(time,fallback.id);
+      }
+      db.prepare('UPDATE projects SET updated_at=? WHERE id=?').run(time,row.project_id);
+      audit(db,'release.update',row.id);
+      return releaseDetail(db,row.id);
+    });
   });
   app.post('/api/admin/releases/:id/publish',{schema:{body:objectSchema({setLatest:{type:'boolean'}})}},async request=>{
     const row=requireRelease(request.params.id);

@@ -148,7 +148,7 @@
 }
 @media(max-width:390px){.admin-topbar-right{gap:10px}.admin-breadcrumb{font-size:11px}.topbar-logout>span{display:none}.topbar-divider{display:none}.stat-value{font-size:26px}.stat-card{padding:15px 12px}.table-tabs{gap:13px}.table-tabs button{font-size:11px}.table-toolbar-controls .search-field{width:100%;flex:auto}.table-select{max-width:100%;width:100%}.onboarding-panel>div{min-width:160px}}
 
-/* 附件名称在各管理页中采用同一个操作入口与独立弹窗。 */
+/* 文件管理表保留独立重命名弹窗，版本编辑页使用行内编辑。 */
 .asset-rename-trigger{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:31px;padding:4px 8px;border:1px solid #dfe9d6;border-radius:5px;background:#f5f8f0;color:#476c35;font-size:11px;line-height:1.5;white-space:nowrap}
 .asset-rename-trigger:hover:enabled{border-color:#bfd0ac;background:#edf4e5;color:#315b27}
 .asset-rename-trigger:disabled{opacity:.5;cursor:not-allowed}

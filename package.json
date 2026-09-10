@@ -14,7 +14,7 @@
     "preview:design": "node design/serve.mjs",
     "design:render": "node design/render.mjs",
     "design:export": "node design/export.mjs",
-    "test:ui": "node scripts/check-ui.mjs",
+    "test:ui": "node scripts/check-ui.mjs && node scripts/check-carousel.mjs",
     "key:generate": "node scripts/generate-key.mjs"
   },
   "dependencies": {

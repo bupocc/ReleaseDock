@@ -1,0 +1,34 @@
+/* 使用相同的墨绿选中态呈现表单与筛选菜单，并保留原生字段作为数据源。 */
+.select-control{position:relative;display:block;width:100%;min-width:0;text-align:left}
+.select-control>.select-native{position:absolute!important;width:1px!important;height:1px!important;min-width:0!important;min-height:0!important;margin:-1px!important;padding:0!important;border:0!important;overflow:hidden!important;clip-path:inset(50%)!important;white-space:nowrap!important;pointer-events:none!important;opacity:0!important}
+.select-trigger{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-width:0;min-height:43px;border:1px solid #d9e2d1;border-radius:7px;padding:10px 12px;background:#fff;color:#304a35;font:inherit;font-size:12px;line-height:1.6;text-align:left;transition:background .16s,border-color .16s,box-shadow .16s}
+.select-trigger:hover:enabled{border-color:#a7bd96;background:#fcfdf9}
+.select-trigger:focus-visible,.select-control.is-open>.select-trigger{outline:none;border-color:#779a65;box-shadow:0 0 0 3px #729b4f1a}
+.select-trigger[aria-invalid=true]{border-color:#b87359}
+.select-trigger:disabled{background:#f5f7f1;color:#87937d;cursor:not-allowed}
+.select-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.select-chevron{display:flex;flex-shrink:0;color:#71866a;transition:transform .16s}
+.select-control.is-open .select-chevron{transform:rotate(180deg)}
+.select-trigger:disabled .select-chevron{opacity:.5}
+.select-menu{position:fixed;z-index:100;overflow:auto;overscroll-behavior:contain;padding:6px;border:1px solid #d7e3ca;border-radius:10px;background:#fff;box-shadow:0 12px 34px #253d2626,0 2px 6px #253d260c;color:#3c5733;scrollbar-width:thin;scrollbar-color:#c7d6bb transparent;animation:select-menu-enter .13s ease-out;transform-origin:top center}
+.select-menu[hidden]{display:none}
+.select-menu[data-direction=up]{transform-origin:bottom center}
+.select-option{display:flex;align-items:center;justify-content:space-between;gap:15px;min-height:39px;padding:9px 11px;border-radius:6px;font-size:12px;line-height:1.65;cursor:pointer;user-select:none}
+.select-option+.select-option{margin-top:2px}
+.select-option.is-active{background:#f0f5e9;color:#315b35}
+.select-option[aria-selected=true]{background:#e9f1e0;color:#356a40;font-weight:500}
+.select-option[aria-selected=true].is-active{background:#e3edd8}
+.select-option[aria-disabled=true]{color:#adb5a5;cursor:not-allowed;background:transparent;font-weight:400}
+.select-option-label{min-width:0;overflow-wrap:anywhere}
+.select-option-check{display:flex;flex-shrink:0;color:#467744;opacity:0}
+.select-option[aria-selected=true]>.select-option-check{opacity:1}
+.select-group-label{padding:10px 11px 5px;color:#8a9b7c;font-size:10px;letter-spacing:.04em}
+.select-control.af-file-select{min-width:0;padding:0;border:0;background:none;border-radius:0}
+.select-control.af-file-select>.select-trigger{min-height:34px;padding:6px 8px;gap:5px;font-size:11px}
+.select-control.table-select{width:190px;padding:0;border:0;background:none;border-radius:0}
+.select-control.table-select>.select-trigger{min-height:36px;padding:7px 10px;font-size:12px}
+@keyframes select-menu-enter{from{opacity:0;transform:translateY(-3px) scale(.99)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:760px){.select-control.table-select{width:145px}.select-trigger{min-height:44px;font-size:14px}.select-option{min-height:43px;font-size:13px}.select-control.af-file-select>.select-trigger{min-height:32px;font-size:10px;padding-inline:7px}}
+@media(max-width:600px){.select-control.af-file-select>.select-trigger{min-height:30px;font-size:10px;padding-inline:6px}.select-control.af-file-select .select-chevron svg{width:12px;height:12px}}
+@media(max-width:390px){.select-control.table-select{width:100%}}
+@media(prefers-reduced-motion:reduce){.select-trigger,.select-chevron{transition:none}.select-menu{animation:none}}

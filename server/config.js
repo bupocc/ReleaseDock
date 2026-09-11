@@ -12,6 +12,7 @@ export function loadConfig(overrides = {}) {
     cookieSecure: process.env.COOKIE_SECURE === 'true' || (!process.env.COOKIE_SECURE && process.env.NODE_ENV === 'production'),
     publicUrl: (process.env.PUBLIC_URL || '').replace(/\/$/, ''),
     trustProxy: process.env.TRUST_PROXY === '1',
+    trustedProxyCidrs: (process.env.TRUSTED_PROXY_CIDRS ?? 'loopback,uniquelocal').split(',').map(value => value.trim()).filter(Boolean),
     maxUploadBytes: Number(process.env.MAX_UPLOAD_MB || 2048) * 1024 * 1024,
     sessionHours: Number(process.env.SESSION_HOURS || 12),
     loginRateLimit: 10,
@@ -19,6 +20,9 @@ export function loadConfig(overrides = {}) {
     ...overrides,
   };
   config.dataDir = path.resolve(config.dataDir);
+  if (config.trustProxy && (!Array.isArray(config.trustedProxyCidrs) || !config.trustedProxyCidrs.length)) {
+    throw new Error('启用 TRUST_PROXY 时，TRUSTED_PROXY_CIDRS 必须包含可信代理的 IP、CIDR 或地址范围名称');
+  }
   for (const key of ['port','maxUploadBytes','sessionHours']) {
     if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`${key} 必须为正数`);
   }

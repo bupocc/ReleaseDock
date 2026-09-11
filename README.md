@@ -96,6 +96,12 @@ docker compose -f compose.yaml -f compose.https.yaml ps
 
 已有 Nginx、Caddy 或负载均衡器时，只启动基础 Compose，将请求反向代理到服务器的 `127.0.0.1:8080`，并设置 `.env` 中的 `COOKIE_SECURE=true`、`PUBLIC_URL=https://你的域名`、`TRUST_PROXY=1`。仅在确有可信反向代理时设置 `TRUST_PROXY=1`。
 
+`TRUST_PROXY=1` 按 `TRUSTED_PROXY_CIDRS` 中的来源地址验证代理。默认 `loopback,uniquelocal` 覆盖回环与私有地址，支持宿主机 Caddy 经 Docker 网桥访问应用，以及内置 Caddy 容器。应用发布端口应保持 `BIND_ADDRESS=127.0.0.1`，允许列表内的网络须由你信任；代理来源固定时可用实际 IP 或 CIDR 收紧，例如 `TRUSTED_PROXY_CIDRS=loopback,172.18.0.1/32`（请替换为实际网桥网关）。自定义值会替换默认允许列表，无效地址会使应用启动失败。
+
+宿主机 Caddy 可直接使用 `reverse_proxy 127.0.0.1:8080`；若设置 `PORT=33005`，上游对应改为 `127.0.0.1:33005`。Caddy 默认保留外部 Host 并转发 `X-Forwarded-Proto`。`PUBLIC_URL` 始终填写外部 HTTPS 源地址，不附加应用内部端口。
+
+部署或更新后，在绑定前检查 `curl -fsS https://你的域名/api/auth/status` 返回的 `ready` 为 `true`。如果配置正确仍返回 `false`，需要检查应用实际镜像和代理来源；旧代码将代理信任传成数字 `1`，在 Fastify 5.12.3 下不再生效，须更新代码并用 `docker compose up -d --build app` 重建镜像；使用内置 Caddy 时，此命令也须带上 `-f compose.yaml -f compose.https.yaml`。只改 `.env` 时也需要重新创建容器，`docker compose restart` 不会刷新其环境变量。URL 中的一次性令牌会主动收起，命令行检查返回 `enrollment: null` 则是因为没有携带浏览器的绑定 Cookie。
+
 公网管理必须使用 HTTPS 域名。仅使用 HTTP 局域网 IP 无法注册或使用通行密钥；远程访问请先配置域名与 HTTPS。
 
 网络无法访问 Docker Hub 时，可选择镜像源构建，不需要修改系统 Docker 设置：
@@ -116,6 +122,8 @@ docker compose up -d --no-build
 | `SESSION_HOURS` | `12` | 会话有效期，最多 168 小时 |
 | `COOKIE_SECURE` | 本地 `false` | HTTPS 源地址会强制启用 Secure Cookie |
 | `PUBLIC_URL` | 本地 `http://localhost:PORT` | 正式环境须填写固定 HTTPS 域名源地址，不含路径、参数或账号 |
+| `TRUST_PROXY` | `0` | 设为 `1` 后仅信任允许地址的代理转发信息 |
+| `TRUSTED_PROXY_CIDRS` | `loopback,uniquelocal` | 可信代理 IP、CIDR 或范围名称，以逗号分隔；自定义值覆盖默认允许列表 |
 | `DOMAIN` | 空 | 使用 HTTPS Compose 时填写域名，不含协议 |
 
 服务器根据配置确定 WebAuthn 来源和 RP ID，不信任客户端提交的 Host 或 Origin 来设置认证域名。注册与登录均要求用户验证；挑战限时、绑定浏览器且只能使用一次。
@@ -175,6 +183,8 @@ docker compose up -d --no-build
 ```sh
 docker compose up -d --build
 ```
+
+使用内置 Caddy 时，更新仍须沿用 `docker compose -f compose.yaml -f compose.https.yaml up -d --build`，以保留正式域名和代理配置。
 
 下面的备份命令适用于云服务器上的 Bash。停服后对整个数据卷做一致性备份：
 

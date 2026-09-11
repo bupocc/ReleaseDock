@@ -17,7 +17,9 @@ const now=()=>new Date().toISOString();
 
 export async function buildApp(options={}) {
   const config=loadConfig(options);
-  const app=Fastify({logger:config.logger?{level:'info',redact:['req.headers.cookie','req.headers.authorization','req.headers.x-csrf-token','req.body.token','req.body.response','res.headers.set-cookie']}:false,trustProxy:config.trustProxy?1:false,bodyLimit:200000,requestTimeout:300000,ajv:{customOptions:{removeAdditional:false}}});
+  // Fastify 已停用仅按数字跳数信任代理的方式，必须验证直接连接来源的地址。
+  const trustProxy=config.trustProxy?config.trustedProxyCidrs:false;
+  const app=Fastify({logger:config.logger?{level:'info',redact:['req.headers.cookie','req.headers.authorization','req.headers.x-csrf-token','req.body.token','req.body.response','res.headers.set-cookie']}:false,trustProxy,bodyLimit:200000,requestTimeout:300000,ajv:{customOptions:{removeAdditional:false}}});
   const db=openDatabase(config.dataDir);
   app.decorate('db',db);
   app.decorate('appConfig',config);

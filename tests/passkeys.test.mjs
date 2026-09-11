@@ -54,6 +54,67 @@ test('通行密钥：站点来源固定，拒绝 HTTP 公网、IP、嵌入账号
   }
 });
 
+test('通行密钥：可信反向代理正确识别 HTTPS 和固定登录域名', { timeout: 10000 }, async t => {
+  const origin = 'https://res.bupo.cc';
+  const app = await fixture(t, { publicUrl: origin, trustProxy: true });
+  const headers = { host: 'res.bupo.cc', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'res.bupo.cc' };
+  // 覆盖宿主机 Caddy、Docker 网桥以及 IPv4 映射和 IPv6 私网来源。
+  for (const remoteAddress of ['127.0.0.1', '::1', '172.18.0.1', '::ffff:172.18.0.1', 'fd00::2']) {
+    const response = await app.inject({ url: '/api/auth/status', remoteAddress, headers });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().ready, true, remoteAddress);
+    assert.equal(response.json().origin, origin);
+    assert.equal(response.json().rpId, 'res.bupo.cc');
+  }
+  const wrongHost = await app.inject({ url: '/api/auth/status', remoteAddress: '172.18.0.1', headers: { ...headers, host: 'evil.example' } });
+  assert.equal(wrongHost.json().ready, false);
+  const wrongOrigin = await app.inject({ method: 'POST', url: '/api/auth/login/options', remoteAddress: '172.18.0.1', headers: { ...headers, origin: 'https://evil.example' }, payload: {} });
+  assert.equal(wrongOrigin.statusCode, 403);
+  assert.equal(wrongOrigin.json().error.code, 'ORIGIN_REJECTED');
+});
+
+test('通行密钥：未启用代理信任或来源不可信时忽略伪造转发头', { timeout: 10000 }, async t => {
+  const headers = { host: 'res.bupo.cc', 'x-forwarded-proto': 'https', 'x-forwarded-for': '127.0.0.1', 'x-forwarded-host': 'res.bupo.cc' };
+  const direct = await fixture(t, { publicUrl: 'https://res.bupo.cc', trustProxy: false });
+  const untrusted = await direct.inject({ url: '/api/auth/status', remoteAddress: '127.0.0.1', headers });
+  assert.equal(untrusted.json().ready, false);
+  const proxied = await fixture(t, { publicUrl: 'https://res.bupo.cc', trustProxy: true });
+  for (const remoteAddress of ['203.0.113.5', '::ffff:203.0.113.5', '2001:db8::5']) {
+    const response = await proxied.inject({ url: '/api/auth/status', remoteAddress, headers });
+    assert.equal(response.json().ready, false, remoteAddress);
+    assert.equal(response.json().origin, 'https://res.bupo.cc');
+  }
+});
+
+test('通行密钥：自定义代理地址覆盖默认私网允许列表', { timeout: 10000 }, async t => {
+  const app = await fixture(t, { publicUrl: 'https://res.bupo.cc', trustProxy: true, trustedProxyCidrs: ['172.18.0.1/32'] });
+  const headers = { host: 'res.bupo.cc', 'x-forwarded-proto': 'https' };
+  for (const [remoteAddress, ready] of [['172.18.0.1', true], ['172.18.0.2', false], ['127.0.0.1', false], ['192.168.1.1', false]]) {
+    const response = await app.inject({ url: '/api/auth/status', remoteAddress, headers });
+    assert.equal(response.json().ready, ready, remoteAddress);
+  }
+});
+
+test('通行密钥：HTTPS 代理下完成绑定、退出和真实签名登录', { timeout: 10000 }, async t => {
+  const app = await fixture(t, { publicUrl: 'https://res.bupo.cc', trustProxy: true });
+  const client = createClient(app);
+  const request = client.request.bind(client);
+  client.request = (method, url, payload, headers = {}) => request(method, url, payload, { 'x-forwarded-proto': 'https', ...headers });
+  assert.equal((await client.request('GET', '/api/auth/status')).json().ready, true);
+  const { authenticator, response } = await registerAuthenticator(app, client);
+  assert.match([response.headers['set-cookie']].flat().join(';'), /Secure/);
+  assert.equal((await client.request('GET', '/api/auth/status')).json().initialized, true);
+  assert.equal((await client.request('POST', '/api/logout')).statusCode, 200);
+  await authenticate(app, client, authenticator);
+  assert.equal((await client.request('GET', '/api/session')).json().authenticated, true);
+});
+
+test('通行密钥：无效代理允许列表会阻止启动', { timeout: 10000 }, async t => {
+  const app = await fixture(t);
+  assert.throws(() => loadConfig({ ...app.appConfig, trustProxy: true, trustedProxyCidrs: [] }), /TRUSTED_PROXY_CIDRS/);
+  await assert.rejects(buildApp({ ...app.appConfig, trustProxy: true, trustedProxyCidrs: ['not-a-proxy-address'] }), /invalid IP address/);
+});
+
 test('通行密钥：一次性初始化支持 Bitwarden 可发现凭据和用户验证', { timeout: 10000 }, async t => {
   const app = await fixture(t);
   const client = createClient(app), authenticator = createAuthenticator();

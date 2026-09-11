@@ -24,17 +24,17 @@ export class ApiError extends Error {
   }
 }
 
-// 密钥仅随登录请求发送；会话由服务器的 HttpOnly Cookie 管理。
+// 通行密钥由浏览器完成验证；后续会话由服务器的 HttpOnly Cookie 管理。
 export async function api(path, options = {}) {
   if (typeof path !== 'string' || !path.startsWith('/api/')) {
     throw new ApiError('请求地址无效。');
   }
   const method = (options.method || 'GET').toUpperCase();
   const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(method);
-  if (unsafe && path !== '/api/login' && !csrfToken) {
+  if (unsafe && !path.startsWith('/api/auth/') && !csrfToken) {
     if (!sessionRequest) sessionRequest = api('/api/session').finally(() => { sessionRequest = null; });
     const session = await sessionRequest;
-    if (!session.authenticated) throw new ApiError('登录已失效，请重新输入管理员密钥。', 401, 'UNAUTHORIZED');
+    if (!session.authenticated) throw new ApiError('登录已失效，请重新使用通行密钥登录。', 401, 'UNAUTHORIZED');
   }
   const headers = new Headers(options.headers || {});
   headers.set('Accept', 'application/json');

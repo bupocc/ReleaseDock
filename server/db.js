@@ -5,6 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 export function openDatabase(dataDir) {
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path.join(dataDir, 'releasedock.sqlite'));
+  const version = db.prepare('PRAGMA user_version').get().user_version;
+  if (version > 2) { db.close(); throw new Error('数据库版本高于当前程序，请使用更新版本的 ReleaseDock'); }
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
@@ -45,8 +47,35 @@ export function openDatabase(dataDir) {
       id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, target_id TEXT,
       created_at TEXT NOT NULL
     );
-    PRAGMA user_version = 1;
   `);
+  if (version < 2) transaction(db, () => {
+    db.exec(`
+      CREATE TABLE passkeys (
+        id TEXT PRIMARY KEY, credential_id TEXT NOT NULL UNIQUE,
+        public_key BLOB NOT NULL, counter INTEGER NOT NULL DEFAULT 0,
+        rp_id TEXT NOT NULL, label TEXT NOT NULL, transports TEXT NOT NULL DEFAULT '[]',
+        device_type TEXT NOT NULL, backed_up INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL, last_used_at TEXT
+      );
+      CREATE TABLE passkey_enrollments (
+        token_hash TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('setup','recovery')),
+        origin TEXT NOT NULL, expires_at INTEGER NOT NULL
+      );
+      CREATE TABLE webauthn_challenges (
+        token_hash TEXT PRIMARY KEY, challenge TEXT NOT NULL,
+        purpose TEXT NOT NULL CHECK(purpose IN ('registration','login','reauthentication')),
+        origin TEXT NOT NULL, rp_id TEXT NOT NULL, expires_at INTEGER NOT NULL,
+        enrollment_hash TEXT, session_hash TEXT, label TEXT
+      );
+      CREATE INDEX webauthn_challenges_expiry ON webauthn_challenges(expires_at);
+      ALTER TABLE sessions ADD COLUMN passkey_id TEXT REFERENCES passkeys(id);
+      ALTER TABLE sessions ADD COLUMN verified_at INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN auth_origin TEXT NOT NULL DEFAULT '';
+      DELETE FROM sessions;
+      DELETE FROM settings WHERE key = '_key_fingerprint';
+      PRAGMA user_version = 2;
+    `);
+  });
   const insert = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
   for (const [key,value] of Object.entries({name:'ReleaseDock',description:'发现我们的软件项目，获取最新稳定版本。',announcement:''})) insert.run(key,value);
   return db;

@@ -3,6 +3,7 @@ import DOMPurify from './vendor/purify.js';
 import { escapeHtml as e, formatDate, formatNumber, versionLabel } from './api.js';
 import { icon, projectMark } from './icons.js';
 import { platformIcons, url } from './app.js';
+import { platformLabel } from './platforms.js';
 
 const AUTO_ADVANCE_MS = 6000;
 const summaryMarkdown = new Marked({
@@ -49,14 +50,13 @@ function slide(project, index, total) {
   const title = release ? plainSummary(release.title, 100) || `${version} 已发布` : '首个版本，正在路上';
   const summary = release ? plainSummary(release.notes) || '此版本暂未填写更新说明，可前往项目页查看详情。' : '公开版本发布后，你可以在这里阅读更新说明，获取适合自己设备的安装包。';
   const platforms = Array.isArray(project.platforms) ? project.platforms : [];
-  const platformNames = { windows: 'Windows', macos: 'macOS', mac: 'macOS', darwin: 'macOS', linux: 'Linux', web: 'Web', android: 'Android', ios: 'iOS' };
-  const destination = url('project', release ? { slug: project.slug, release: release.id } : { slug: project.slug });
+  const destination = url('project', release ? { slug: project.slug, version: release.version } : { slug: project.slug });
   return `<article class="carousel-slide${index === 0 ? ' is-active' : ''}" data-carousel-slide="${e(project.id || project.slug)}" data-carousel-slide-index="${index}" role="group" aria-roledescription="幻灯片" aria-label="${index + 1} / ${total}：${e(project.name)}" ${index === 0 ? '' : 'aria-hidden="true" inert'}>
     <div class="carousel-project">
       <div class="carousel-project-meta">${project.category ? `<span class="tag tag-outline">${e(project.category)}</span>` : '<span class="carousel-project-kind">软件项目</span>'}<span>${release ? '最新发布' : '期待新版本'}</span></div>
       <div class="carousel-project-heading">${projectMark(project, 'large')}<div><h2>${e(project.name)}</h2>${version ? `<span class="carousel-version mono">${e(version)}</span>` : '<span class="carousel-version">尚未发布</span>'}</div></div>
       <p class="carousel-description">${e(description)}</p>
-      ${platforms.length ? `<div class="carousel-platforms"><div class="platform-icons">${platformIcons(platforms, 15)}</div><span>${e(platforms.map((platform) => platformNames[String(platform).toLowerCase()] || platform).join(' / '))}</span></div>` : ''}
+      ${platforms.length ? `<div class="carousel-platforms"><div class="platform-icons">${platformIcons(platforms, 15)}</div><span>${e(platforms.map(platformLabel).join(' / '))}</span></div>` : ''}
       <div class="carousel-project-actions"><a class="btn btn-primary" href="${destination}" data-carousel-open>${release ? '查看更新与下载' : '查看项目'} ${icon('arrow', 16)}</a><span>${formatNumber(project.publishedCount ?? project.releaseCount)} 个公开版本</span></div>
     </div>
     <div class="carousel-release">

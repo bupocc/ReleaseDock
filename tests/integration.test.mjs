@@ -4,11 +4,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash,randomUUID } from 'node:crypto';
+import { PassThrough } from 'node:stream';
 import { buildApp } from '../server/app.js';
 import { parseRange } from '../server/files.js';
 import { validVersion } from '../server/schemas.js';
 
-const key='integration-only-admin-key-not-for-production-42';
+import { bootstrapAdmin, createClient } from './helpers/passkeys.mjs';
 
 function multipart(filename,content) {
   const boundary='----releasedock-integration-boundary';
@@ -17,7 +18,7 @@ function multipart(filename,content) {
 
 test('版本发布、管理鉴权与公开下载形成真实闭环',{timeout:55000},async t=>{
   const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'releasedock-test-'));
-  let app=await buildApp({dataDir,adminKey:key,logger:false,loginRateLimit:100,maxUploadBytes:1024});
+  let app=await buildApp({dataDir,logger:false,loginRateLimit:100,maxUploadBytes:1024});
   let cookie='',csrf='',projectId='',releaseId='',assetId='';
   const bytes=Buffer.from('releasedock-test-software-package');
   const sha256=createHash('sha256').update(bytes).digest('hex');
@@ -42,14 +43,14 @@ test('版本发布、管理鉴权与公开下载形成真实闭环',{timeout:550
     assert.deepEqual(Object.keys(site).sort(),['announcement','description','name']);
     assert.equal((await call('GET','/assets/../.data/admin-key')).statusCode,404);
   });
-  await t.test('密钥登录设置 HttpOnly 会话，不回传管理密钥',async()=>{
-    assert.equal((await call('POST','/api/login',{key:'incorrect-key'})).statusCode,401);
-    const response=await call('POST','/api/login',{key});
+  await t.test('通行密钥绑定设置 HttpOnly 会话，旧文本密钥入口关闭',async()=>{
+    assert.equal((await call('POST','/api/login',{key:'obsolete-key'})).statusCode,404);
+    const {response,headers}=await bootstrapAdmin(app);
     assert.equal(response.statusCode,200,response.body);
-    assert.match(response.headers['set-cookie'],/HttpOnly/);
-    assert.match(response.headers['set-cookie'],/SameSite=Strict/i);
-    assert.ok(!response.body.includes(key));
-    cookie=response.headers['set-cookie'].split(';')[0];csrf=json(response).csrfToken;
+    const cookieHeaders=[response.headers['set-cookie']].flat().join(';');
+    assert.match(cookieHeaders,/HttpOnly/);
+    assert.match(cookieHeaders,/SameSite=Strict/i);
+    cookie=headers.cookie;csrf=headers['x-csrf-token'];
     assert.equal(json(await call('GET','/api/session')).authenticated,true);
   });
   await t.test('写操作检查 CSRF 与来源，项目元数据执行校验',async()=>{
@@ -114,12 +115,13 @@ test('版本发布、管理鉴权与公开下载形成真实闭环',{timeout:550
     const after=json(await call('GET','/api/admin/assets')).assets[0].downloadCount;
     assert.equal(after,before);
   });
-  await t.test('已发布安装包不可覆盖或删除，项目隐藏立即阻止下载',async()=>{
+  await t.test('已发布安装包可新增和删除，项目隐藏立即阻止下载',async()=>{
     assert.equal((await call('PATCH',`/api/admin/releases/${releaseId}`,{title:'已修正的正式版本标题'})).statusCode,200);
     assert.equal((await app.inject({url:`/api/releases/${releaseId}`})).json().release.title,'已修正的正式版本标题');
-    assert.equal((await call('DELETE',`/api/admin/assets/${assetId}`)).statusCode,409);
     const file=multipart('another.exe',bytes);
-    assert.equal((await call('POST',`/api/admin/releases/${releaseId}/assets?platform=Windows&arch=x64`,file.payload,file.headers)).statusCode,409);
+    const extra=await call('POST',`/api/admin/releases/${releaseId}/assets?platform=Windows&arch=x64`,file.payload,file.headers);
+    assert.equal(extra.statusCode,201,extra.body);
+    assert.equal((await call('DELETE',`/api/admin/assets/${extra.json().asset.id}`)).statusCode,200);
     assert.equal((await call('PATCH',`/api/admin/projects/${projectId}`,{isPublic:false})).statusCode,200);
     assert.equal((await app.inject({url:`/api/downloads/${assetId}`})).statusCode,404);
     assert.equal((await app.inject({url:'/api/projects/test-orbit'})).statusCode,404);
@@ -154,7 +156,7 @@ test('版本发布、管理鉴权与公开下载形成真实闭环',{timeout:550
     const counts=json(await call('GET','/api/admin/overview')).counts;
     assert.equal(counts.projects,1);assert.equal(counts.releases,1);assert.equal(counts.drafts,1);assert.equal(counts.assets,1);
     await app.close();
-    app=await buildApp({dataDir,adminKey:key,logger:false,loginRateLimit:100,maxUploadBytes:1024});
+    app=await buildApp({dataDir,logger:false,loginRateLimit:100,maxUploadBytes:1024});
     assert.equal(json(await call('GET','/api/site')).site.name,'测试发布中心');
     assert.equal(json(await call('GET','/api/projects')).projects.length,1);
     assert.equal((await app.inject({url:`/api/downloads/${assetId}`})).statusCode,200);
@@ -175,11 +177,9 @@ test('安装包改名保留文件身份、权限边界和持久化记录',{timeo
     assert.ok(target.startsWith(parent+path.sep)&&path.basename(target).startsWith('releasedock-test-rename-'));
     await fs.rm(target,{recursive:true,force:true});
   });
-  const options={dataDir,adminKey:key,logger:false,loginRateLimit:100,maxUploadBytes:1024};
+  const options={dataDir,logger:false,loginRateLimit:100,maxUploadBytes:1024};
   app=await buildApp(options);
-  const login=await app.inject({method:'POST',url:'/api/login',payload:{key}});
-  assert.equal(login.statusCode,200,login.body);
-  const headers={cookie:login.headers['set-cookie'].split(';')[0],'x-csrf-token':login.json().csrfToken};
+  const {headers}=await bootstrapAdmin(app);
   const call=(method,url,payload,extraHeaders={})=>app.inject({method,url,payload,headers:{...headers,...extraHeaders}});
   const project=(await call('POST','/api/admin/projects',{name:'文件改名测试',slug:'asset-rename'})).json().project;
   const release=(await call('POST','/api/admin/releases',{projectId:project.id,version:'1.0.0',title:'安装包改名',notes:'验证下载名称与文件内容独立保存。',channel:'stable'})).json().release;
@@ -291,16 +291,17 @@ test('安装包改名保留文件身份、权限边界和持久化记录',{timeo
     assert.equal(head.statusCode,200);assertName(head,filename);assert.equal(head.body,'');assert.equal(Number(head.headers['content-length']),bytes.length);
     assert.deepEqual(fileIdentity(stored()),originalIdentity);
   });
-  await t.test('正式版仍锁定平台和架构，同时提交的名称不会部分生效',async()=>{
+  await t.test('正式版可修改平台和架构，重名失败不会部分修改字段',async()=>{
     const before=stored(),beforeRelease=storedRelease(),beforeAudit=auditCount();
     for(const metadata of [{platform:'Windows'},{arch:'x64'}]) {
-      const response=await call('PATCH',url,{filename:'不能部分保存.zip',...metadata});
-      assert.equal(response.statusCode,409,response.body);assert.equal(response.json().error.code,'RELEASE_IMMUTABLE');
+      const response=await call('PATCH',url,{filename:other.filename,...metadata});
+      assert.equal(response.statusCode,409,response.body);assert.equal(response.json().error.code,'ASSET_FILENAME_CONFLICT');
     }
     assert.deepEqual(stored(),before);assert.deepEqual(storedRelease(),beforeRelease);assert.equal(auditCount(),beforeAudit);
     filename='ReleaseDock 修订名称.zip';
-    const sameMetadata=await call('PATCH',url,{filename,platform:'Linux',arch:'arm64'});
+    const sameMetadata=await call('PATCH',url,{filename,platform:'Windows',arch:'x64'});
     assert.equal(sameMetadata.statusCode,200,sameMetadata.body);assert.equal(sameMetadata.json().asset.filename,filename);
+    assert.equal(sameMetadata.json().asset.platform,'Windows');assert.equal(sameMetadata.json().asset.arch,'x64');assert.deepEqual(fileIdentity(stored()),originalIdentity);
     const duplicate=await call('PATCH',url,{filename:other.filename});
     assert.equal(duplicate.statusCode,409,duplicate.body);assert.equal(stored().filename,filename);
   });
@@ -310,7 +311,7 @@ test('安装包改名保留文件身份、权限边界和持久化记录',{timeo
     const renamed=await call('PATCH',url,{filename});
     assert.equal(renamed.statusCode,200,renamed.body);assert.equal(storedRelease().status,'withdrawn');
     assert.equal((await app.inject({url:downloadUrl})).statusCode,404);
-    assert.equal((await call('PATCH',url,{platform:'Windows'})).statusCode,409);
+    assert.equal((await call('PATCH',url,{platform:'Linux'})).statusCode,200);
     const preview=await call('GET',`${url}/download`);
     assert.equal(preview.statusCode,200);assertName(preview,filename);assert.deepEqual(preview.rawPayload,bytes);
     assert.equal((await call('POST',`/api/admin/releases/${release.id}/publish`,{setLatest:true})).statusCode,200);
@@ -341,11 +342,9 @@ test('灵活版本号与正式版本编辑保持发布状态、文件身份和�
     assert.ok(target.startsWith(parent+path.sep)&&path.basename(target).startsWith('releasedock-test-edit-'));
     await fs.rm(target,{recursive:true,force:true});
   });
-  const options={dataDir,adminKey:key,logger:false,loginRateLimit:100,maxUploadBytes:1024};
+  const options={dataDir,logger:false,loginRateLimit:100,maxUploadBytes:1024};
   app=await buildApp(options);
-  const login=await app.inject({method:'POST',url:'/api/login',payload:{key}});
-  assert.equal(login.statusCode,200,login.body);
-  const headers={cookie:login.headers['set-cookie'].split(';')[0],'x-csrf-token':login.json().csrfToken};
+  const {headers}=await bootstrapAdmin(app);
   const call=(method,url,payload,extraHeaders={})=>app.inject({method,url,payload,headers:{...headers,...extraHeaders}});
   const project=(await call('POST','/api/admin/projects',{name:'版本编辑测试',slug:'release-edit'})).json().project;
   const otherProject=(await call('POST','/api/admin/projects',{name:'独立项目',slug:'release-edit-other'})).json().project;
@@ -446,11 +445,11 @@ test('灵活版本号与正式版本编辑保持发布状态、文件身份和�
     assert.equal((await call('PATCH',`/api/admin/releases/${main}`,{setLatest:true})).statusCode,200);
     assert.equal(releaseRow(otherLatest).is_latest,1);assert.equal(releaseRow(main).published_at,publishedAt);
   });
-  await t.test('编辑正式版不会放开安装包替换，原下载 ID、字节和 SHA-256 不变',async()=>{
+  await t.test('仅编辑版本信息不改变原下载 ID、字节和 SHA-256',async()=>{
     const file=multipart('replacement.zip',bytes);
-    assert.equal((await call('POST',`/api/admin/releases/${main}/assets?platform=Windows&arch=x64`,file.payload,file.headers)).statusCode,409);
-    assert.equal((await call('DELETE',`/api/admin/assets/${mainAsset.id}`)).statusCode,409);
-    assert.equal((await call('PATCH',`/api/admin/assets/${mainAsset.id}`,{platform:'Linux'})).statusCode,409);
+    const extra=await call('POST',`/api/admin/releases/${main}/assets?platform=Windows&arch=x64`,file.payload,file.headers);
+    assert.equal(extra.statusCode,201,extra.body);
+    assert.equal((await call('DELETE',`/api/admin/assets/${extra.json().asset.id}`)).statusCode,200);
     assert.deepEqual(app.db.prepare('SELECT * FROM assets WHERE id=?').get(mainAsset.id),originalAsset);
     const download=await app.inject({url:`/api/downloads/${mainAsset.id}`});
     assert.equal(download.statusCode,200);assert.deepEqual(download.rawPayload,bytes);assert.equal(download.headers.etag,`"${sha256}"`);
@@ -483,9 +482,215 @@ test('灵活版本号与正式版本编辑保持发布状态、文件身份和�
   });
 });
 
+test('管理员可在发布和下架后管理附件，内容替换失败或并发时保留有效文件',{timeout:30000},async t=>{
+  const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'releasedock-test-content-'));
+  const pending=new Set();
+  let app;
+  t.after(async()=>{
+    for(const request of pending)request.finish();
+    await Promise.allSettled([...pending].map(request=>request.response));
+    await app?.close();
+    const target=path.resolve(dataDir),parent=path.resolve(os.tmpdir());
+    assert.ok(target.startsWith(parent+path.sep)&&path.basename(target).startsWith('releasedock-test-content-'));
+    await fs.rm(target,{recursive:true,force:true});
+  });
+  const options={dataDir,logger:false,loginRateLimit:100,maxUploadBytes:512};
+  app=await buildApp(options);
+  const {headers}=await bootstrapAdmin(app);
+  const call=(method,url,payload,extraHeaders={})=>app.inject({method,url,payload,headers:{...headers,...extraHeaders}});
+  const project=(await call('POST','/api/admin/projects',{name:'安装包内容管理',slug:'asset-content'})).json().project;
+  const release=(await call('POST','/api/admin/releases',{projectId:project.id,version:'1.5.0.1',title:'可维护的版本附件',notes:'验证附件替换、并发和公开权限。',channel:'stable'})).json().release;
+  const upload=async(filename,bytes)=>{
+    const file=multipart(filename,bytes);
+    const response=await call('POST',`/api/admin/releases/${release.id}/assets?platform=Windows&arch=x64`,file.payload,file.headers);
+    assert.equal(response.statusCode,201,response.body);
+    return response.json().asset;
+  };
+  const replace=(id,filename,bytes,query='?platform=Linux&arch=arm64')=>{
+    const file=multipart(filename,bytes);
+    return call('PUT',`/api/admin/assets/${id}/content${query}`,file.payload,file.headers);
+  };
+  const originalBytes=Buffer.from('original software package\0\xff');
+  let expectedBytes=originalBytes;
+  const original=await upload('original.zip',originalBytes),sibling=await upload('occupied.zip',originalBytes);
+  assert.equal((await call('POST',`/api/admin/releases/${release.id}/publish`,{setLatest:true})).statusCode,200);
+  const stored=(id=original.id)=>app.db.prepare('SELECT * FROM assets WHERE id=?').get(id);
+  const publication=()=>{
+    const row=app.db.prepare('SELECT status,published_at,is_latest FROM releases WHERE id=?').get(release.id);
+    return {...row};
+  };
+  const snapshot=async()=>({assets:app.db.prepare('SELECT * FROM assets ORDER BY id').all(),release:app.db.prepare('SELECT * FROM releases WHERE id=?').get(release.id),project:app.db.prepare('SELECT * FROM projects WHERE id=?').get(project.id),audits:app.db.prepare('SELECT COUNT(*) AS n FROM audit_log').get().n,files:(await fs.readdir(path.join(dataDir,'uploads'))).sort()});
+  const assertClean=async()=>assert.deepEqual((await fs.readdir(path.join(dataDir,'uploads'))).sort(),app.db.prepare('SELECT storage_name FROM assets ORDER BY storage_name').all().map(row=>row.storage_name));
+  const startUpload=(id,filename,bytes)=>{
+    const file=multipart(filename,bytes),stream=new PassThrough();
+    const ending=Buffer.from('\r\n------releasedock-integration-boundary--\r\n');
+    const request={finish:()=>{if(!stream.writableEnded)stream.end(ending);}};
+    request.response=call('PUT',`/api/admin/assets/${id}/content?platform=Linux&arch=x64`,stream,file.headers).then(response=>{pending.delete(request);return response;});
+    pending.add(request);
+    stream.write(file.payload.subarray(0,file.payload.length-ending.length));
+    return request;
+  };
+  const waitForUploads=async count=>{
+    const deadline=Date.now()+3000;
+    while(Date.now()<deadline) {
+      if((await fs.readdir(path.join(dataDir,'uploads'))).filter(name=>name.endsWith('.part')).length>=count)return;
+      await new Promise(resolve=>setTimeout(resolve,5));
+    }
+    assert.fail('等待可控上传进入临时文件阶段超时');
+  };
+
+  await t.test('替换接口继续检查匿名、编码路径、CSRF 和平台必填字段',async()=>{
+    const file=multipart('new.zip',Buffer.from('replacement'));
+    const before=await snapshot();
+    for(const route of [`/api/admin/assets/${original.id}/content`,`/%61pi/%61dmin/assets/${original.id}/content`]) {
+      assert.equal((await app.inject({method:'PUT',url:`${route}?platform=Linux&arch=x64`,payload:file.payload,headers:file.headers})).statusCode,401);
+      assert.equal((await call('PUT',`${route}?platform=Linux&arch=x64`,file.payload,{...file.headers,'x-csrf-token':''})).statusCode,403);
+    }
+    assert.equal((await call('PUT',`/api/admin/assets/${original.id}/content?platform=Linux&arch=x64`,file.payload,{...file.headers,origin:'https://attacker.example'})).statusCode,403);
+    for(const query of ['','?platform=Linux','?arch=x64'])assert.equal((await replace(original.id,'new.zip',expectedBytes,query)).statusCode,400);
+    assert.equal((await replace('missing','new.zip',expectedBytes)).statusCode,404);
+    assert.deepEqual(await snapshot(),before);
+  });
+  await t.test('已发布版本可新增、改名、修改平台架构和删除附件',async()=>{
+    const before=publication(),added=await upload('additional.zip',Buffer.from('additional binary'));
+    assert.equal((await app.inject({url:`/api/downloads/${added.id}`})).statusCode,200);
+    const edited=await call('PATCH',`/api/admin/assets/${added.id}`,{filename:'附加安装包.zip',platform:'macOS',arch:'universal'});
+    assert.equal(edited.statusCode,200,edited.body);assert.equal(edited.json().asset.platform,'macOS');assert.equal(edited.json().asset.arch,'universal');
+    const detail=(await app.inject({url:`/api/releases/${release.id}`})).json();
+    assert.equal(detail.assets.find(asset=>asset.id===added.id).filename,'附加安装包.zip');
+    assert.equal((await call('DELETE',`/api/admin/assets/${added.id}`)).statusCode,200);
+    assert.equal((await app.inject({url:`/api/downloads/${added.id}`})).statusCode,404);assert.equal(stored(added.id),undefined);
+    assert.deepEqual(publication(),before);await assertClean();
+  });
+  await t.test('已发布附件流式替换后原链接返回新名称、字节和校验值',async()=>{
+    const before=stored(),beforePublication=publication();
+    expectedBytes=Buffer.from('updated software package with new bytes\0\xfe');
+    const response=await replace(original.id,'updated.tar.gz',expectedBytes,'?platform=macOS&arch=universal');
+    assert.equal(response.statusCode,200,response.body);
+    const asset=response.json().asset,hash=createHash('sha256').update(expectedBytes).digest('hex');
+    assert.equal(asset.id,original.id);assert.equal(asset.releaseId,release.id);assert.equal(asset.createdAt,original.createdAt);assert.equal(asset.downloadCount,before.download_count);
+    assert.equal(asset.filename,'updated.tar.gz');assert.equal(asset.platform,'macOS');assert.equal(asset.arch,'universal');assert.equal(asset.size,expectedBytes.length);assert.equal(asset.sha256,hash);
+    assert.notEqual(stored().storage_name,before.storage_name);
+    await assert.rejects(fs.access(path.join(dataDir,'uploads',before.storage_name)),{code:'ENOENT'});
+    assert.deepEqual(await fs.readFile(path.join(dataDir,'uploads',stored().storage_name)),expectedBytes);
+    const download=await app.inject({url:`/api/downloads/${original.id}`});
+    assert.equal(download.statusCode,200);assert.deepEqual(download.rawPayload,expectedBytes);assert.equal(download.headers.etag,`"${hash}"`);assert.match(download.headers['content-disposition'],/updated.tar.gz/);
+    const changedRange=await app.inject({url:`/api/downloads/${original.id}`,headers:{range:'bytes=2-6','if-range':`"${before.sha256}"`}});
+    assert.equal(changedRange.statusCode,200);assert.deepEqual(changedRange.rawPayload,expectedBytes);
+    const partial=await app.inject({url:`/api/downloads/${original.id}`,headers:{range:'bytes=2-6','if-range':`"${hash}"`}});
+    assert.equal(partial.statusCode,206);assert.deepEqual(partial.rawPayload,expectedBytes.subarray(2,7));
+    assert.equal(app.db.prepare('SELECT action FROM audit_log WHERE target_id=? ORDER BY id DESC LIMIT 1').get(original.id).action,'asset.replace');
+    assert.deepEqual(publication(),beforePublication);await assertClean();
+  });
+  await t.test('超限、空文件、非法名称和重名均保留原文件及全部元数据',async()=>{
+    const before=await snapshot();
+    for(const [filename,bytes,status] of [['too-large.zip',Buffer.alloc(1024),413],['empty.zip',Buffer.alloc(0),400],['CON.zip',expectedBytes,400],['occupied.zip',expectedBytes,409]]) {
+      const response=await replace(original.id,filename,bytes);
+      assert.equal(response.statusCode,status,response.body);
+      assert.deepEqual(await snapshot(),before);
+    }
+    assert.deepEqual((await app.inject({url:`/api/downloads/${original.id}`})).rawPayload,expectedBytes);await assertClean();
+  });
+  await t.test('新文件落盘后的数据库失败回滚到原下载',async fault=>{
+    const before=await snapshot(),prepare=app.db.prepare.bind(app.db);
+    const stub=fault.mock.method(app.db,'prepare',sql=>{
+      if(/^UPDATE assets SET/.test(sql)&&sql.includes('storage_name='))return {run(){throw new Error('隔离测试：数据库写入失败');}};
+      return prepare(sql);
+    });
+    try {
+      const response=await replace(original.id,'database-failure.zip',Buffer.from('must not become active'));
+      assert.equal(response.statusCode,500,response.body);
+    }finally{stub.mock.restore();}
+    assert.deepEqual(await snapshot(),before);
+    assert.deepEqual((await app.inject({url:`/api/downloads/${original.id}`})).rawPayload,expectedBytes);await assertClean();
+  });
+  await t.test('上传期间元数据被修改时拒绝覆盖，保留已保存的修改',async()=>{
+    const before=stored(),uploading=startUpload(original.id,'stale-upload.zip',Buffer.from('stale upload'));
+    try {
+      await waitForUploads(1);
+      const edit=await call('PATCH',`/api/admin/assets/${original.id}`,{filename:'concurrent-edit.zip',platform:'Windows',arch:'x86'});
+      assert.equal(edit.statusCode,200,edit.body);
+    }finally{uploading.finish();}
+    const response=await uploading.response;
+    assert.equal(response.statusCode,409,response.body);assert.equal(response.json().error.code,'ASSET_CHANGED');
+    assert.equal(stored().filename,'concurrent-edit.zip');assert.equal(stored().platform,'Windows');assert.equal(stored().arch,'x86');assert.equal(stored().storage_name,before.storage_name);assert.equal(stored().sha256,before.sha256);
+    assert.deepEqual((await app.inject({url:`/api/downloads/${original.id}`})).rawPayload,expectedBytes);await assertClean();
+  });
+  await t.test('两个并发替换只能有一个提交成功，失败请求不遗留文件',async()=>{
+    const choices=[{filename:'winner-a.zip',bytes:Buffer.from('candidate a')},{filename:'winner-b.zip',bytes:Buffer.from('candidate b with different content')}];
+    const uploads=choices.map(choice=>startUpload(original.id,choice.filename,choice.bytes));
+    try{await waitForUploads(2);}finally{uploads.forEach(uploading=>uploading.finish());}
+    const responses=await Promise.all(uploads.map(uploading=>uploading.response));
+    assert.deepEqual(responses.map(response=>response.statusCode).sort((a,b)=>a-b),[200,409]);
+    const winner=responses.findIndex(response=>response.statusCode===200);
+    assert.equal(responses[1-winner].json().error.code,'ASSET_CHANGED');
+    expectedBytes=choices[winner].bytes;
+    assert.equal(stored().filename,choices[winner].filename);assert.equal(stored().sha256,createHash('sha256').update(expectedBytes).digest('hex'));
+    assert.deepEqual((await app.inject({url:`/api/downloads/${original.id}`})).rawPayload,expectedBytes);await assertClean();
+  });
+  await t.test('上传期间删除目标不会被上传请求恢复',async()=>{
+    const extra=await upload('delete-during-upload.zip',Buffer.from('temporary package'));
+    const uploading=startUpload(extra.id,'deleted-replacement.zip',Buffer.from('must not be restored'));
+    try {
+      await waitForUploads(1);
+      assert.equal((await call('DELETE',`/api/admin/assets/${extra.id}`)).statusCode,200);
+    }finally{uploading.finish();}
+    const response=await uploading.response;
+    assert.equal(response.statusCode,404,response.body);assert.equal(stored(extra.id),undefined);
+    assert.equal((await app.inject({url:`/api/downloads/${extra.id}`})).statusCode,404);await assertClean();
+  });
+  await t.test('上传期间下架版本后，替换成功也不会重新开放下载',async()=>{
+    const previous=publication();
+    expectedBytes=Buffer.from('updated while release was withdrawn');
+    const uploading=startUpload(original.id,'withdrawn-main.zip',expectedBytes);
+    try {
+      await waitForUploads(1);
+      assert.equal((await call('POST',`/api/admin/releases/${release.id}/withdraw`)).statusCode,200);
+    }finally{uploading.finish();}
+    const response=await uploading.response;
+    assert.equal(response.statusCode,200,response.body);assert.equal(publication().status,'withdrawn');assert.equal(publication().published_at,previous.published_at);
+    assert.equal((await app.inject({url:`/api/downloads/${original.id}`})).statusCode,404);
+    assert.deepEqual((await call('GET',`/api/admin/assets/${original.id}/download`)).rawPayload,expectedBytes);await assertClean();
+  });
+  await t.test('下架版本仍可增删改和替换附件，匿名始终不可访问',async()=>{
+    const before=publication(),extra=await upload('withdrawn-extra.zip',Buffer.from('private first bytes'));
+    assert.equal((await call('PATCH',`/api/admin/assets/${extra.id}`,{filename:'withdrawn-metadata.zip',platform:'Linux',arch:'arm64'})).statusCode,200);
+    const bytes=Buffer.from('private replacement content'),response=await replace(extra.id,'withdrawn-replaced.zip',bytes);
+    assert.equal(response.statusCode,200,response.body);assert.equal(response.json().asset.id,extra.id);
+    assert.equal((await app.inject({url:`/api/downloads/${extra.id}`})).statusCode,404);
+    assert.deepEqual((await call('GET',`/api/admin/assets/${extra.id}/download`)).rawPayload,bytes);
+    assert.equal((await call('DELETE',`/api/admin/assets/${extra.id}`)).statusCode,200);
+    assert.equal((await call('GET',`/api/admin/assets/${extra.id}/download`)).statusCode,404);
+    assert.deepEqual(publication(),before);await assertClean();
+  });
+  await t.test('隐藏项目替换附件不会公开，恢复可见性与重启后使用新内容',async()=>{
+    assert.equal((await call('POST',`/api/admin/releases/${release.id}/publish`,{setLatest:true})).statusCode,200);
+    assert.equal((await call('PATCH',`/api/admin/projects/${project.id}`,{isPublic:false})).statusCode,200);
+    const before=publication();
+    expectedBytes=Buffer.from('persistent replacement in hidden project');
+    assert.equal((await replace(original.id,'persistent.zip',expectedBytes)).statusCode,200);
+    assert.equal((await app.inject({url:`/api/downloads/${original.id}`})).statusCode,404);assert.deepEqual(publication(),before);
+    assert.equal((await call('PATCH',`/api/admin/projects/${project.id}`,{isPublic:true})).statusCode,200);
+    const asset=stored();
+    await app.close();app=await buildApp(options);
+    assert.deepEqual(stored(),asset);assert.deepEqual(publication(),before);
+    const download=await app.inject({url:`/api/downloads/${original.id}`});
+    assert.equal(download.statusCode,200);assert.deepEqual(download.rawPayload,expectedBytes);assert.equal(download.headers.etag,`"${asset.sha256}"`);await assertClean();
+  });
+  await t.test('删除最后一个附件只移除下载，不改变版本发布状态',async()=>{
+    const before=publication();
+    assert.equal((await call('DELETE',`/api/admin/assets/${sibling.id}`)).statusCode,200);
+    assert.equal((await call('DELETE',`/api/admin/assets/${original.id}`)).statusCode,200);
+    assert.deepEqual(publication(),before);
+    const detail=await app.inject({url:`/api/releases/${release.id}`});
+    assert.equal(detail.statusCode,200);assert.deepEqual(detail.json().assets,[]);
+    assert.equal((await app.inject({url:`/api/downloads/${original.id}`})).statusCode,404);await assertClean();
+  });
+});
+
 test('公开项目目录独立查找最新已发布版本并仅携带有限日志摘要',{timeout:10000},async t=>{
   const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'releasedock-test-catalog-'));
-  const app=await buildApp({dataDir,adminKey:key,logger:false});
+  const app=await buildApp({dataDir,logger:false});
   t.after(async()=>{
     await app.close();
     const target=path.resolve(dataDir),parent=path.resolve(os.tmpdir());
@@ -532,22 +737,22 @@ test('Range 与灵活版本号边界验证',()=>{
   for(const value of ['',null,undefined,123,' 1.5','1.5 ','1.5\n','1.5\r\n','1.5\r','nightly/rc','1\\2','版本1','<script>','.1.5','-rc','_nightly','+build','1.5\0','1 5','1:5','x'.repeat(101)])assert.equal(validVersion(value),false,JSON.stringify(value));
 });
 
-test('登录限流阻止连续猜测密钥',{timeout:10000},async t=>{
+test('通行密钥验证入口限制连续请求',{timeout:10000},async t=>{
   const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'releasedock-test-rate-'));
-  const app=await buildApp({dataDir,adminKey:key,logger:false,loginRateLimit:2});
+  const app=await buildApp({dataDir,logger:false,loginRateLimit:2});
   t.after(async()=>{await app.close();const target=path.resolve(dataDir);assert.ok(target.startsWith(path.resolve(os.tmpdir())+path.sep)&&path.basename(target).startsWith('releasedock-test-'));await fs.rm(target,{recursive:true,force:true});});
-  for(let i=0;i<2;i++)assert.equal((await app.inject({method:'POST',url:'/api/login',payload:{key:'incorrect'}})).statusCode,401);
-  const response=await app.inject({method:'POST',url:'/api/login',payload:{key:'incorrect'}});
+  const client=createClient(app);
+  for(let i=0;i<2;i++)assert.equal((await client.request('POST','/api/auth/login/options',{})).statusCode,409);
+  const response=await client.request('POST','/api/auth/login/options',{});
   assert.equal(response.statusCode,429);
   assert.equal(response.json().error.code,'RATE_LIMITED');
 });
 
 test('并发上传不能超过每版本 64 个附件',{timeout:10000},async t=>{
   const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'releasedock-test-race-'));
-  const app=await buildApp({dataDir,adminKey:key,logger:false});
+  const app=await buildApp({dataDir,logger:false});
   t.after(async()=>{await app.close();const target=path.resolve(dataDir);assert.ok(target.startsWith(path.resolve(os.tmpdir())+path.sep)&&path.basename(target).startsWith('releasedock-test-'));await fs.rm(target,{recursive:true,force:true});});
-  const login=await app.inject({method:'POST',url:'/api/login',payload:{key}});
-  const headers={cookie:login.headers['set-cookie'].split(';')[0],'x-csrf-token':login.json().csrfToken};
+  const {headers}=await bootstrapAdmin(app);
   const project=(await app.inject({method:'POST',url:'/api/admin/projects',headers,payload:{name:'并发边界测试',slug:'upload-race'}})).json().project;
   const release=(await app.inject({method:'POST',url:'/api/admin/releases',headers,payload:{projectId:project.id,version:'1.0.0',title:'并发测试',notes:'验证数量上限',channel:'stable'}})).json().release;
   // 预置边界数据，让两次真实上传竞争最后一个可用名额。

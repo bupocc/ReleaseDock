@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { isIP } from 'node:net';
 
 export function loadConfig(overrides = {}) {
   if (fs.existsSync('.env')) process.loadEnvFile('.env');
@@ -9,14 +9,12 @@ export function loadConfig(overrides = {}) {
     host: process.env.HOST || '127.0.0.1',
     port: Number(process.env.PORT || 8080),
     dataDir,
-    adminKey: process.env.ADMIN_KEY || '',
-    adminKeyFile: process.env.ADMIN_KEY_FILE || '',
     cookieSecure: process.env.COOKIE_SECURE === 'true' || (!process.env.COOKIE_SECURE && process.env.NODE_ENV === 'production'),
     publicUrl: (process.env.PUBLIC_URL || '').replace(/\/$/, ''),
     trustProxy: process.env.TRUST_PROXY === '1',
     maxUploadBytes: Number(process.env.MAX_UPLOAD_MB || 2048) * 1024 * 1024,
     sessionHours: Number(process.env.SESSION_HOURS || 12),
-    loginRateLimit: 5,
+    loginRateLimit: 10,
     logger: true,
     ...overrides,
   };
@@ -25,16 +23,20 @@ export function loadConfig(overrides = {}) {
     if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`${key} 必须为正数`);
   }
   if (config.sessionHours > 168) throw new Error('SESSION_HOURS 不能超过 168 小时');
-  if (config.publicUrl && !/^https?:\/\/[^/]+$/.test(config.publicUrl)) throw new Error('PUBLIC_URL 必须是完整的 HTTP/HTTPS 源地址，不能包含路径');
-  fs.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
-  if (config.adminKeyFile) config.adminKey = fs.readFileSync(config.adminKeyFile, 'utf8').trim();
-  if (!config.adminKey) {
-    // 首次启动生成的密钥仅保存在持久目录，不写日志，也不返回浏览器。
-    config.adminKeyFile = path.join(config.dataDir, 'admin-key');
-    try { fs.writeFileSync(config.adminKeyFile, randomBytes(36).toString('base64url'), { flag: 'wx', mode: 0o600 }); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
-    config.adminKey = fs.readFileSync(config.adminKeyFile, 'utf8').trim();
+  if (config.publicUrl) {
+    let address;
+    try { address = new URL(config.publicUrl); } catch { throw new Error('PUBLIC_URL 必须是完整的 HTTPS 源地址'); }
+    if (address.origin !== config.publicUrl || address.username || address.password || isIP(address.hostname.replace(/^\[|\]$/g, ''))) {
+      throw new Error('PUBLIC_URL 必须是域名源地址，不能包含路径、参数、账号或 IP 地址');
+    }
+    if (address.protocol !== 'https:' && !(address.protocol === 'http:' && address.hostname === 'localhost')) {
+      throw new Error('通行密钥要求 HTTPS；仅 localhost 可使用 HTTP');
+    }
+    if (address.protocol === 'https:') config.cookieSecure = true;
   }
-  if (config.adminKey.length < 32 || config.adminKey.length > 512) throw new Error('管理员密钥长度必须为 32–512 个字符，请使用随机生成的密钥');
+  // 历史 ADMIN_KEY 环境变量与密钥文件不再参与认证，也不再生成文本密钥。
+  delete config.adminKey;
+  delete config.adminKeyFile;
+  fs.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
   return config;
 }

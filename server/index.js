@@ -5,7 +5,7 @@ const config=loadConfig();
 const app=await buildApp(config);
 try {
   await app.listen({host:config.host,port:config.port});
-  if(config.adminKeyFile)app.log.info({keyFile:config.adminKeyFile},'管理员密钥已保存到本地文件；请勿公开该文件');
+  if(!app.db.prepare('SELECT 1 FROM passkeys LIMIT 1').get())app.log.info('管理员尚未绑定通行密钥，请在服务器运行 pnpm passkey:setup 生成一次性注册链接');
 } catch(error) {
   app.log.error(error);
   await app.close();

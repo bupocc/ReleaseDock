@@ -290,3 +290,20 @@
   .af-assets-notice{font-size:11px;padding:12px 14px}
 }
 @media(prefers-reduced-motion:reduce){.af-filename-input,.af-platform-choices label{transition:none}}
+
+/* 附件操作在各发布状态下保持可见，移动端单独成行。 */
+.af-file-actions{display:flex;flex-direction:column;align-items:stretch;gap:7px;min-width:0;padding-top:2px}
+.af-file-actions button{display:flex;align-items:center;justify-content:center;gap:4px;min-height:31px;padding:5px 6px;border-radius:6px;font-size:11px;line-height:1.6;white-space:nowrap}
+.af-replace-file{border:1px solid #d9e4ce;background:#f7faf3;color:#527742}
+.af-replace-file:hover:enabled{background:#eaf2e1;border-color:#adc698}
+.af-file-actions .af-remove-file{color:#96735e;background:transparent}
+.af-file-actions .af-remove-file:hover:enabled{background:#fbefe6;color:#9b5135}
+.af-file-actions button:focus-visible{outline:2px solid #80a568;outline-offset:2px}
+.af-file-actions button:disabled{opacity:.55;cursor:wait}
+.af-preview-card-footer>#af-card-platforms{flex-wrap:wrap}
+@media(min-width:601px){.af-file-row{grid-template-columns:24px minmax(0,1fr) 94px 88px 80px}}
+@media(max-width:600px){
+  .af-file-actions{grid-column:2/-1;grid-row:3;flex-direction:row;justify-content:flex-end;padding-top:3px}
+  .af-file-actions button{min-height:35px;padding:6px 10px;font-size:12px}
+  .af-file-actions .af-remove-file{margin:0}
+}

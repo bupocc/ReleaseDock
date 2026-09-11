@@ -17,7 +17,7 @@ const now=()=>new Date().toISOString();
 
 export async function buildApp(options={}) {
   const config=loadConfig(options);
-  const app=Fastify({logger:config.logger?{level:'info',redact:['req.headers.cookie','req.headers.authorization','req.headers.x-csrf-token','req.body.key','res.headers.set-cookie']}:false,trustProxy:config.trustProxy?1:false,bodyLimit:200000,requestTimeout:300000,ajv:{customOptions:{removeAdditional:false}}});
+  const app=Fastify({logger:config.logger?{level:'info',redact:['req.headers.cookie','req.headers.authorization','req.headers.x-csrf-token','req.body.token','req.body.response','res.headers.set-cookie']}:false,trustProxy:config.trustProxy?1:false,bodyLimit:200000,requestTimeout:300000,ajv:{customOptions:{removeAdditional:false}}});
   const db=openDatabase(config.dataDir);
   app.decorate('db',db);
   app.decorate('appConfig',config);
@@ -62,6 +62,14 @@ export async function buildApp(options={}) {
     if(!row)throw apiError(404,'NOT_FOUND','项目不存在或尚未公开');
     return row;
   };
+  const getPublicVersion=(slug,version)=>{
+    const project=getPublicProject(slug);
+    if(!validVersion(version))throw apiError(404,'NOT_FOUND','版本不存在或尚未公开');
+    // 精确匹配保存的版本号，改名或下架后不会误指向另一个带 v 或不带 v 的版本。
+    const row=db.prepare('SELECT * FROM releases WHERE project_id=? AND version=?').get(project.id,version);
+    if(!row||row.status!=='published')throw apiError(404,'NOT_FOUND','版本不存在或尚未公开');
+    return {project,release:row};
+  };
 
   app.get('/healthz',async()=>({ok:db.prepare('SELECT 1 AS ok').get().ok===1}));
   app.get('/api/site',async()=>({site:siteJson(db)}));
@@ -85,6 +93,10 @@ export async function buildApp(options={}) {
   app.get('/api/projects/:slug',async request=>{
     const row=getPublicProject(request.params.slug);
     return {project:projectJson(db,row),releases:db.prepare("SELECT * FROM releases WHERE project_id=? AND status='published' ORDER BY is_latest DESC,published_at DESC").all(row.id).map(item=>releaseJson(db,item))};
+  });
+  app.get('/api/projects/:slug/releases/:version',async request=>{
+    const {project,release}=getPublicVersion(request.params.slug,request.params.version);
+    return {...releaseDetail(db,release.id),project:projectJson(db,project)};
   });
   app.get('/api/releases',async request=>{
     const limit=Math.min(100,Math.max(1,Number.parseInt(request.query.limit||'20',10)||20));
@@ -206,13 +218,23 @@ export async function buildApp(options={}) {
   await registerFiles(app,db,config);
   const webRoot=path.join(root,'web');
   if(fs.existsSync(webRoot)) {
-    // 仅公开浏览器需要的两个依赖入口，保持离线可用且不暴露整个依赖目录。
+    // 仅公开浏览器所需入口，保持离线可用且不暴露整个依赖目录。
     for(const [name,packageName] of [['marked.js','marked'],['purify.js','dompurify']]) {
       const source=fileURLToPath(import.meta.resolve(packageName));
       app.get(`/assets/vendor/${name}`,async(request,reply)=>reply.type('text/javascript; charset=utf-8').header('Cache-Control','public, max-age=0').send(fs.createReadStream(source)));
     }
+    const webauthnBundle=fileURLToPath(new URL('../dist/bundle/index.umd.min.js',import.meta.resolve('@simplewebauthn/browser')));
+    const webauthnModule=fs.readFileSync(webauthnBundle,'utf8')+'\nconst {startRegistration,startAuthentication,browserSupportsWebAuthn}=globalThis.SimpleWebAuthnBrowser;\nexport {startRegistration,startAuthentication,browserSupportsWebAuthn};\n';
+    app.get('/assets/vendor/webauthn.js',async(request,reply)=>reply.type('text/javascript; charset=utf-8').header('Cache-Control','public, max-age=0').send(webauthnModule));
     await app.register(fastifyStatic,{root:webRoot,prefix:'/assets/',index:false,dotfiles:'deny',redirect:false,cacheControl:true,maxAge:0});
-    app.get('/',async(request,reply)=>reply.type('text/html; charset=utf-8').send(fs.createReadStream(path.join(webRoot,'index.html'))));
+    const index=(reply,status=200)=>reply.code(status).type('text/html; charset=utf-8').header('Cache-Control','no-store').send(fs.createReadStream(path.join(webRoot,'index.html')));
+    app.get('/',async(request,reply)=>index(reply));
+    app.get('/:slug/:version',async(request,reply)=>{
+      // API 与静态资源保留各自的 404，不以页面 HTML 掩盖接口或资源错误。
+      if(['api','assets'].includes(request.params.slug))return reply.callNotFound();
+      try{getPublicVersion(request.params.slug,request.params.version);return index(reply);}
+      catch(error){if(error.statusCode===404)return index(reply,404);throw error;}
+    });
   }
   return app;
 }

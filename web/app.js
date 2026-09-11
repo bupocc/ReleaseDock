@@ -1,33 +1,20 @@
 import { icon, logo } from './icons.js';
 import { api, ApiError, escapeHtml } from './api.js';
+import { platformLabel, platformIcon } from './platforms.js';
+import { adminPages, publicPages, initializeRoute, currentRoute, replaceRoute, scrollToAnchor, url, safeNext } from './router.js';
+import { beginEnrollment } from './auth-bootstrap.js';
 
-const adminPages = new Set(['overview', 'projects', 'releases', 'publish', 'project-edit', 'files', 'settings']);
-const publicPages = new Set(['home', 'catalog', 'project', 'login', 'activity']);
-const params = new URLSearchParams(location.search);
-const page = params.get('page') || 'home';
+const enrollmentRequest = beginEnrollment();
+let route = initializeRoute();
+if (enrollmentRequest && route.page !== 'login') route = replaceRoute('login');
+const { page, params } = route;
 let site = { name: 'ReleaseDock', description: '', announcement: '' };
 let toastTimer;
 let expired = false;
 
-export function url(name, extra = '') {
-  const query = new URLSearchParams(typeof extra === 'string' ? extra.replace(/^&/, '') : extra);
-  query.set('page', name);
-  // page 放在首位，让分享的地址保持一致。
-  const result = new URLSearchParams({ page: name });
-  query.forEach((value, key) => { if (key !== 'page') result.set(key, value); });
-  return `?${result.toString()}`;
-}
+export { url, safeNext, replaceRoute, platformIcon };
 
 export function getSite() { return site; }
-
-export function safeNext(value) {
-  if (!value) return url('overview');
-  try {
-    const next = new URL(value, location.origin);
-    if (next.origin === location.origin && next.pathname === '/' && adminPages.has(next.searchParams.get('page'))) return `${next.pathname}${next.search}`;
-  } catch { /* 无效的回跳地址使用管理概览。 */ }
-  return url('overview');
-}
 
 export function header(active = 'home') {
   const name = escapeHtml(site.name);
@@ -40,13 +27,8 @@ export function footer() {
   return `<footer class="site-footer"><div class="footer-brand">${icon('layers', 14)}<span>© ${new Date().getFullYear()} ${escapeHtml(site.name)}<span class="desktop-only"> · 简单发布，安心获取</span></span></div><div class="footer-links"><a href="${url('home')}">更新动态</a><a href="${url('login')}">管理员入口 ${icon('diagonal', 11)}</a></div></footer>`;
 }
 
-export function platformIcon(platform) {
-  const names = { windows: 'windows', macos: 'apple', mac: 'apple', darwin: 'apple', linux: 'terminal', web: 'globe', android: 'box', ios: 'apple' };
-  return names[String(platform).toLowerCase()] || 'box';
-}
-
 export function platformIcons(platforms = [], size = 13) {
-  return (Array.isArray(platforms) ? platforms : []).map((name) => `<span title="${escapeHtml(name)}" aria-label="${escapeHtml(name)}">${icon(platformIcon(name), size)}</span>`).join('');
+  return (Array.isArray(platforms) ? platforms : []).map((name) => `<span title="${escapeHtml(platformLabel(name))}" aria-label="${escapeHtml(platformLabel(name))}">${icon(platformIcon(name), size)}</span>`).join('');
 }
 
 export function toast(message) {
@@ -61,7 +43,8 @@ export function toast(message) {
 function loginRedirect() {
   if (expired) return;
   expired = true;
-  const next = `${location.pathname}${location.search}`;
+  const route = currentRoute();
+  const next = url(route.page, route.params);
   location.replace(url('login', { next, expired: '1' }));
 }
 window.addEventListener('session-expired', loginRedirect);
@@ -74,12 +57,14 @@ async function loadData() {
   }
   const siteRequest = api('/api/site');
   if (adminPages.has(page) || page === 'login') {
+    const enrollmentResult = page === 'login' && enrollmentRequest ? await enrollmentRequest : null;
     const [siteData, session] = await Promise.all([siteRequest, api('/api/session')]);
     site = { ...site, ...siteData.site };
     if (adminPages.has(page) && !session.authenticated) { loginRedirect(); return null; }
     if (page === 'login') {
-      if (session.authenticated) { location.replace(safeNext(params.get('next'))); return null; }
-      return { site };
+      const auth = await api('/api/auth/status');
+      if (session.authenticated && !auth.enrollment && !enrollmentResult?.error) { location.replace(safeNext(params.get('next'))); return null; }
+      return { site, auth, enrollmentError: enrollmentResult?.error || '' };
     }
   } else {
     const siteData = await siteRequest;
@@ -91,9 +76,17 @@ async function loadData() {
     const result = await api(`/api/projects/${encodeURIComponent(slug)}`);
     const releases = result.releases || [];
     const requested = params.get('release');
+    const version = params.get('version');
     const selected = requested ? releases.find((item) => String(item.id) === requested) : releases.find((item) => item.isLatest) || releases[0];
-    if (requested && !selected) throw new ApiError('这个版本不存在或已下架，请返回项目查看其他版本。', 404, 'RELEASE_NOT_FOUND');
-    const detail = selected ? await api(`/api/releases/${encodeURIComponent(selected.id)}`) : { release: null, assets: [] };
+    if (!version && requested && !selected) throw new ApiError('这个版本不存在或已下架，请返回项目查看其他版本。', 404, 'RELEASE_NOT_FOUND');
+    // 服务端同时核对版本状态，防止带 v 的草稿或下架版本被误指向另一数字版本。
+    const detail = version
+      ? await api(`/api/projects/${encodeURIComponent(slug)}/releases/${encodeURIComponent(version)}`)
+      : selected ? await api(`/api/releases/${encodeURIComponent(selected.id)}`) : { release: null, assets: [] };
+    const clean = new URLSearchParams({ slug: result.project.slug });
+    if (detail.release) clean.set('version', detail.release.version);
+    if (params.get('anchor')) clean.set('anchor', params.get('anchor'));
+    replaceRoute('project', clean);
     return { ...result, releases, release: detail.release, assets: detail.assets || [], site };
   }
   if (page === 'home' || page === 'activity') return { ...await api('/api/releases?limit=100'), site };
@@ -150,10 +143,12 @@ async function render() {
     const notices = { 'project-created': '项目已创建。', 'project-saved': '项目设置已保存。', 'release-saved': '版本已保存。', 'release-published': '版本已发布。', 'release-withdrawn': '版本已下架，公开页面已更新。' };
     if (params.has('notice')) {
       if (notices[params.get('notice')]) toast(notices[params.get('notice')]);
-      const clean = new URL(location.href);
-      clean.searchParams.delete('notice');
-      history.replaceState(null, '', `${clean.pathname}${clean.search}${clean.hash}`);
+      const route = currentRoute();
+      const clean = new URLSearchParams(route.params);
+      clean.delete('notice');
+      replaceRoute(route.page, clean);
     }
+    scrollToAnchor();
   } catch (error) { showError(error); }
   finally {
     document.documentElement.dataset.ready = 'true';

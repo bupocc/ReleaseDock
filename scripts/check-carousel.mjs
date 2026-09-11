@@ -4,6 +4,7 @@ import os from 'node:os';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { buildApp } from '../server/app.js';
+import { bootstrapAdmin } from '../tests/helpers/passkeys.mjs';
 
 const require=createRequire(import.meta.url);
 const modules=process.env.DESIGN_NODE_MODULES||'C:/Users/ASUS/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules';
@@ -11,7 +12,7 @@ const {chromium}=require(require.resolve('playwright',{paths:[modules]}));
 const output=path.resolve('test-results');
 await fs.mkdir(output,{recursive:true});
 const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'releasedock-carousel-'));
-const app=await buildApp({dataDir,adminKey:'carousel-acceptance-only-key-2026-no-production',logger:false});
+const app=await buildApp({dataDir,logger:false});
 const base=await app.listen({host:'127.0.0.1',port:0});
 const browser=await chromium.launch({headless:true,executablePath:process.env.DESIGN_BROWSER||'C:/Program Files/Google/Chrome/Application/chrome.exe'});
 const deadline=setTimeout(()=>browser.close(),55000);
@@ -41,9 +42,7 @@ async function release(project,version,channel,notes) {
   return (await call('POST',`/api/admin/releases/${release.id}/publish`,{setLatest:channel==='stable'})).release;
 }
 try {
-  const login=await app.inject({method:'POST',url:'/api/login',payload:{key:'carousel-acceptance-only-key-2026-no-production'}});
-  assert.equal(login.statusCode,200);
-  headers={cookie:login.headers['set-cookie'].split(';')[0],'x-csrf-token':login.json().csrfToken};
+  ({headers}=await bootstrapAdmin(app));
   await call('PATCH','/api/admin/settings',{announcement:'发布中心已更新：欢迎查看项目近期改进。'});
   await visit('');
   const spacing=await page.evaluate(()=>{
@@ -154,7 +153,7 @@ try {
   await page.locator('[data-carousel-dot="0"]').click();
   await page.locator('[data-carousel-slide].is-active [data-carousel-open]').click();
   await page.waitForSelector('html[data-ready="true"]');
-  assert.ok(page.url().includes(newest.id));
+  assert.equal(new URL(page.url()).pathname, `/${second.slug}/${newest.version}`);
   assert.ok((await page.locator('.release-topline').innerText()).includes('2.1.0-rc.1'));
   checkpoint('手机轮播、目录搜索无横向溢出，查看更新链接定位到对应版本');
 

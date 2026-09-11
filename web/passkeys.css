@@ -1,0 +1,54 @@
+.passkey-login-description{font-size:13px;color:#66785b;line-height:1.8;margin-top:12px}
+.passkey-login-form .login-submit{margin-top:22px;min-height:48px;line-height:1.5}
+.passkey-name-field{display:block}
+.passkey-name-field input{display:block;width:100%;min-height:46px;border:1px solid #d6e1cb;border-radius:7px;padding:11px 13px;color:#35572d;background:#fff;font:13px var(--font);line-height:1.6}
+.passkey-name-field input:focus-visible{outline:2px solid #73955a;outline-offset:3px}
+.passkey-name-field input:disabled{background:#f6f8f2;color:#66785b}
+.passkey-name-field .form-label{font-size:12px;color:#526b43}
+.passkey-provider-hint{display:flex;align-items:flex-start;gap:8px;color:#667a59;font-size:12px;line-height:1.9;margin-top:18px}
+.passkey-provider-hint>svg{flex-shrink:0;margin-top:3px}
+.passkey-enrollment-note{font-size:11px;color:#6b7b60;line-height:1.9;margin-top:11px}
+.passkey-notice{font-size:12px;color:#607451;line-height:1.9;margin-top:17px;padding:13px 14px;border:1px solid #e0e7d6;border-radius:8px;background:#f5f8f0;overflow-wrap:anywhere}
+.passkey-notice .link-button{margin-top:8px;font-size:12px}
+.passkey-refresh{display:flex;justify-content:center;gap:6px;margin:6px auto 0;background:none;font-size:11px;color:#657f52;min-height:36px}
+.passkey-settings{margin-top:24px;max-width:750px}
+.passkey-settings .panel-heading{align-items:flex-start}
+.passkey-settings .panel-heading>.btn{flex-shrink:0;font-size:12px;min-height:39px}
+.passkey-settings-body{padding:0 25px 25px}
+.passkey-backup-tip{display:flex;align-items:flex-start;gap:9px;padding:13px 14px;border-radius:7px;background:#f2f6ed;color:#657b52;font-size:12px;line-height:1.9}
+.passkey-backup-tip>svg{flex-shrink:0;margin-top:3px}
+.passkey-verification-note{font-size:12px;color:#8b6c42;line-height:1.8;margin-top:14px}
+.passkey-verification-note[hidden],.passkey-loading[hidden],.passkey-name-field[hidden]{display:none}
+.passkey-loading{font-size:12px;padding:23px 0}
+.passkey-list{list-style:none;padding:0;margin:9px 0 0}
+.passkey-row{display:flex;align-items:center;gap:12px;padding:20px 0;border-bottom:1px solid #e8eee1}
+.passkey-row:last-child{border-bottom:0}
+.passkey-row-icon{display:flex;align-items:center;justify-content:center;width:37px;height:37px;flex-shrink:0;background:#f0f5e8;border-radius:9px;color:#78935f}
+.passkey-row-content{flex:1;min-width:0}
+.passkey-row-title{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.passkey-row-title>strong{font-size:13px;font-weight:500;color:#35562d;overflow-wrap:anywhere}
+.passkey-row-title .tag{font-size:10px;padding:4px 6px}
+.passkey-row-content p{font-size:11px;line-height:1.8;color:#728564;margin-top:7px;overflow-wrap:anywhere}
+.passkey-row-actions{display:flex;gap:14px;flex-shrink:0;align-items:center}
+.passkey-row-actions button{font-size:12px;background:none;min-height:36px}
+.passkey-row-actions .passkey-remove{color:#985746}
+.passkey-row-actions button:disabled{color:#9aa591;cursor:not-allowed;opacity:.6}
+.passkey-settings-body>.inline-error,.passkey-settings-body>.inline-success{margin-top:14px}
+.passkey-empty{font-size:12px;color:#718263;line-height:1.9;padding:20px 0}
+.passkey-dialog .passkey-name-field{margin-top:23px}
+.passkey-dialog .passkey-progress{color:#60784f;font-size:12px}
+.passkey-progress:empty{display:none}
+.passkey-dialog .dialog-actions .btn{min-height:40px;font-size:12px}
+@media(max-width:760px){
+  .passkey-login-description{font-size:12px}
+  .passkey-name-field input{font-size:16px}
+  .passkey-provider-hint,.passkey-notice{font-size:12px}
+  .passkey-settings .panel-heading{flex-wrap:wrap;gap:15px}
+  .passkey-settings-body{padding:0 19px 20px}
+  .passkey-backup-tip{font-size:11px}
+  .passkey-row{flex-wrap:wrap;gap:10px;padding:18px 0}
+  .passkey-row-content{flex-basis:calc(100% - 50px)}
+  .passkey-row-content p{font-size:11px}
+  .passkey-row-actions{width:100%;padding-left:47px;gap:21px}
+  .passkey-dialog .dialog-actions .btn{min-height:44px}
+}

@@ -63,29 +63,42 @@ export async function registerFiles(app,db,config) {
   // 单实例启动时清理上次中断的临时流文件，不删除已完成的版本附件。
   for(const directory of [uploadDir,iconDir])for(const name of fs.readdirSync(directory)){if(/^[0-9a-f-]{36}\.part$/.test(name))fs.unlinkSync(path.join(directory,name));}
 
-  function draft(id) {
+  function requireRelease(id) {
     const row=db.prepare('SELECT * FROM releases WHERE id=?').get(id);
     if(!row)throw apiError(404,'RELEASE_NOT_FOUND','版本不存在');
-    if(row.status!=='draft')throw apiError(409,'RELEASE_IMMUTABLE','只有草稿版本可以修改安装包');
     return row;
+  }
+  function requireAsset(id) {
+    const row=db.prepare('SELECT * FROM assets WHERE id=?').get(id);
+    if(!row)throw apiError(404,'NOT_FOUND','文件不存在');
+    return row;
+  }
+  function touchRelease(id) {
+    const time=new Date().toISOString();
+    db.prepare('UPDATE releases SET updated_at=? WHERE id=?').run(time,id);
+    db.prepare('UPDATE projects SET updated_at=? WHERE id=(SELECT project_id FROM releases WHERE id=?)').run(time,id);
+  }
+  async function removeStoredFile(name) {
+    try{await fsp.unlink(path.join(uploadDir,name));}
+    catch(error){if(error.code!=='ENOENT')app.log.warn({err:error,storageName:name},'安装包记录已更新，旧文件暂未清理');}
   }
   function availableFilename(releaseId,filename,exceptId='') {
     if(db.prepare('SELECT 1 FROM assets WHERE release_id=? AND filename=? AND id<>?').get(releaseId,filename,exceptId))throw apiError(409,'ASSET_FILENAME_CONFLICT','这个版本中已有同名安装包，请使用不同的文件名称');
   }
   app.post('/api/admin/releases/:id/assets',{schema:{querystring:assetMetadataSchema}},async(request,reply)=>{
-    draft(request.params.id);
+    requireRelease(request.params.id);
     if(db.prepare('SELECT COUNT(*) AS n FROM assets WHERE release_id=?').get(request.params.id).n>=64)throw apiError(400,'ASSET_LIMIT','一个版本最多包含 64 个附件');
     const file=await receiveFile(request,uploadDir,config.maxUploadBytes);
     const finalPath=path.join(uploadDir,file.id);
     try {
       transaction(db,()=>{
-        draft(request.params.id);
+        requireRelease(request.params.id);
         if(db.prepare('SELECT COUNT(*) AS n FROM assets WHERE release_id=?').get(request.params.id).n>=64)throw apiError(400,'ASSET_LIMIT','一个版本最多包含 64 个附件');
         availableFilename(request.params.id,file.filename);
         // 文件完成落盘后才登记元数据，失败时外层负责移除孤立文件。
         fs.renameSync(file.temporary,finalPath);
         db.prepare('INSERT INTO assets(id,release_id,filename,storage_name,content_type,size,platform,arch,sha256,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(file.id,request.params.id,file.filename,file.id,file.contentType,file.size,request.query.platform,request.query.arch,file.sha256,new Date().toISOString());
-        db.prepare('UPDATE releases SET updated_at=? WHERE id=?').run(new Date().toISOString(),request.params.id);
+        touchRelease(request.params.id);
         audit(db,'asset.upload',file.id);
       });
     }catch(error){await fsp.unlink(file.temporary).catch(()=>{});await fsp.unlink(finalPath).catch(()=>{});throw error;}
@@ -93,30 +106,52 @@ export async function registerFiles(app,db,config) {
   });
   app.patch('/api/admin/assets/:id',{schema:{body:assetPatchSchema}},async request=>{
     const updated=transaction(db,()=>{
-      const asset=db.prepare('SELECT * FROM assets WHERE id=?').get(request.params.id);
-      if(!asset)throw apiError(404,'NOT_FOUND','文件不存在');
+      const asset=requireAsset(request.params.id);
       const filename=request.body.filename===undefined?asset.filename:safeFilename(request.body.filename);
       const platform=request.body.platform??asset.platform,arch=request.body.arch??asset.arch;
       const renamed=filename!==asset.filename,metadataChanged=platform!==asset.platform||arch!==asset.arch;
-      // 正式发布后仅允许修正下载名称，安装包内容和平台身份保持不变。
-      if(metadataChanged)draft(asset.release_id);
       if(!renamed&&!metadataChanged)return asset;
       availableFilename(asset.release_id,filename,asset.id);
       db.prepare('UPDATE assets SET filename=?,platform=?,arch=? WHERE id=?').run(filename,platform,arch,asset.id);
-      db.prepare('UPDATE releases SET updated_at=? WHERE id=?').run(new Date().toISOString(),asset.release_id);
+      touchRelease(asset.release_id);
       if(renamed)audit(db,'asset.rename',asset.id);
       if(metadataChanged)audit(db,'asset.update',asset.id);
       return db.prepare('SELECT * FROM assets WHERE id=?').get(asset.id);
     });
     return {asset:assetJson(updated)};
   });
+  app.put('/api/admin/assets/:id/content',{schema:{querystring:assetMetadataSchema}},async request=>{
+    const original=requireAsset(request.params.id);
+    const file=await receiveFile(request,uploadDir,config.maxUploadBytes);
+    const finalPath=path.join(uploadDir,file.id);
+    let updated;
+    try {
+      updated=transaction(db,()=>{
+        const current=requireAsset(original.id);
+        // 上传期间允许其他管理员操作，但不覆盖已经保存的新内容或元数据。
+        if(['storage_name','filename','platform','arch'].some(field=>current[field]!==original[field]))throw apiError(409,'ASSET_CHANGED','安装包已被其他操作更新，请刷新后重试');
+        availableFilename(current.release_id,file.filename,current.id);
+        fs.renameSync(file.temporary,finalPath);
+        db.prepare('UPDATE assets SET filename=?,storage_name=?,content_type=?,size=?,platform=?,arch=?,sha256=? WHERE id=?').run(file.filename,file.id,file.contentType,file.size,request.query.platform,request.query.arch,file.sha256,current.id);
+        touchRelease(current.release_id);
+        audit(db,'asset.replace',current.id);
+        return requireAsset(current.id);
+      });
+    }catch(error){await fsp.unlink(file.temporary).catch(()=>{});await fsp.unlink(finalPath).catch(()=>{});throw error;}
+    // 新文件与元数据全部成功后再清理旧文件，失败的上传不会破坏原下载。
+    await removeStoredFile(original.storage_name);
+    return {asset:assetJson(updated)};
+  });
   app.delete('/api/admin/assets/:id',async request=>{
-    const asset=db.prepare('SELECT * FROM assets WHERE id=?').get(request.params.id);
-    if(!asset)throw apiError(404,'NOT_FOUND','文件不存在');
-    draft(asset.release_id);
-    const filename=path.join(uploadDir,asset.storage_name);
-    // 同步文件操作与同步事务相邻，避免删除过程中插入发布操作。
-    transaction(db,()=>{try{fs.unlinkSync(filename);}catch(error){if(error.code!=='ENOENT')throw error;}db.prepare('DELETE FROM assets WHERE id=?').run(asset.id);audit(db,'asset.remove',asset.id);});
+    const asset=transaction(db,()=>{
+      const row=requireAsset(request.params.id);
+      db.prepare('DELETE FROM assets WHERE id=?').run(row.id);
+      touchRelease(row.release_id);
+      audit(db,'asset.remove',row.id);
+      return row;
+    });
+    // 先提交逻辑删除，避免数据库失败后留下指向已删文件的有效记录。
+    await removeStoredFile(asset.storage_name);
     return {ok:true};
   });
 
@@ -124,27 +159,32 @@ export async function registerFiles(app,db,config) {
     const row=db.prepare('SELECT a.*,r.status,p.is_public FROM assets a JOIN releases r ON r.id=a.release_id JOIN projects p ON p.id=r.project_id WHERE a.id=?').get(request.params.id);
     if(!row||(!admin&&(row.status!=='published'||!row.is_public)))throw apiError(404,'NOT_FOUND','文件不存在或尚未公开');
     const filename=path.join(uploadDir,row.storage_name);
-    let stat;
-    try{stat=await fsp.stat(filename);}catch{throw apiError(404,'FILE_MISSING','文件暂时不可用，请联系站点管理员');}
-    if(!stat.isFile()||stat.size!==row.size)throw apiError(409,'FILE_INVALID','文件完整性异常，请联系站点管理员');
-    const etag=`"${row.sha256}"`;
-    const rangeHeader=request.headers['if-range']&&request.headers['if-range']!==etag?undefined:request.headers.range;
-    const range=parseRange(rangeHeader,row.size);
-    reply.header('Accept-Ranges','bytes').header('ETag',etag).header('Content-Type','application/octet-stream');
-    const encoded=encodeURIComponent(row.filename).replace(/['()*]/g,char=>`%${char.charCodeAt(0).toString(16).toUpperCase()}`);
-    reply.header('Content-Disposition',`attachment; filename="download.bin"; filename*=UTF-8''${encoded}`);
-    if(range===false){reply.code(416).header('Content-Range',`bytes */${row.size}`);return reply.send();}
-    if(range){reply.code(206).header('Content-Range',`bytes ${range.start}-${range.end}/${row.size}`).header('Content-Length',range.end-range.start+1);}
-    else reply.header('Content-Length',row.size);
-    if(request.method==='HEAD')return reply.send();
-    if(!admin&&(!range||range.start===0)) {
-      // 统计下载开始请求；后续断点续传片段和 HEAD 请求不重复累计。
-      transaction(db,()=>{
-        db.prepare('UPDATE assets SET download_count=download_count+1 WHERE id=?').run(row.id);
-        db.prepare('INSERT INTO daily_downloads(day,count) VALUES(?,1) ON CONFLICT(day) DO UPDATE SET count=count+1').run(new Date().toISOString().slice(0,10));
-      });
-    }
-    return reply.send(fs.createReadStream(filename,range||undefined));
+    let descriptor,stream;
+    try {
+      // 读取元数据后立即持有同一文件，替换或删除不会截断已经开始的下载。
+      try{descriptor=fs.openSync(filename,'r');}catch{throw apiError(404,'FILE_MISSING','文件暂时不可用，请联系站点管理员');}
+      const stat=fs.fstatSync(descriptor);
+      if(!stat.isFile()||stat.size!==row.size)throw apiError(409,'FILE_INVALID','文件完整性异常，请联系站点管理员');
+      const etag=`"${row.sha256}"`;
+      const rangeHeader=request.headers['if-range']&&request.headers['if-range']!==etag?undefined:request.headers.range;
+      const range=parseRange(rangeHeader,row.size);
+      reply.header('Accept-Ranges','bytes').header('ETag',etag).header('Content-Type','application/octet-stream');
+      const encoded=encodeURIComponent(row.filename).replace(/['()*]/g,char=>`%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+      reply.header('Content-Disposition',`attachment; filename="download.bin"; filename*=UTF-8''${encoded}`);
+      if(range===false){fs.closeSync(descriptor);descriptor=undefined;reply.code(416).header('Content-Range',`bytes */${row.size}`);return reply.send();}
+      if(range){reply.code(206).header('Content-Range',`bytes ${range.start}-${range.end}/${row.size}`).header('Content-Length',range.end-range.start+1);}
+      else reply.header('Content-Length',row.size);
+      if(request.method==='HEAD'){fs.closeSync(descriptor);descriptor=undefined;return reply.send();}
+      if(!admin&&(!range||range.start===0)) {
+        // 统计下载开始请求；后续断点续传片段和 HEAD 请求不重复累计。
+        transaction(db,()=>{
+          db.prepare('UPDATE assets SET download_count=download_count+1 WHERE id=?').run(row.id);
+          db.prepare('INSERT INTO daily_downloads(day,count) VALUES(?,1) ON CONFLICT(day) DO UPDATE SET count=count+1').run(new Date().toISOString().slice(0,10));
+        });
+      }
+      stream=fs.createReadStream(filename,{...range,fd:descriptor,autoClose:true});
+      return reply.send(stream);
+    }catch(error){if(stream)stream.destroy();else if(descriptor!==undefined)fs.closeSync(descriptor);throw error;}
   }
   app.route({method:['GET','HEAD'],url:'/api/downloads/:id',handler:(request,reply)=>download(request,reply,false)});
   app.route({method:['GET','HEAD'],url:'/api/admin/assets/:id/download',handler:(request,reply)=>download(request,reply,true)});

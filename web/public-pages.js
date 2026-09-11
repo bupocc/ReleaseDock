@@ -24,7 +24,7 @@ function catalogPage(data) {
   return `${header('catalog')}<main class="container catalog-page" id="main-content">${siteAnnouncement(data.site)}${renderProjectCarousel(projects)}
     <section class="catalog" id="projects"><div class="section-heading"><h2>项目 <span class="count">${projects.length.toString().padStart(2, '0')}</span></h2><label class="search-field">${icon('search', 16)}<input id="project-search" type="search" placeholder="搜索项目名称、功能…" aria-label="搜索项目"><kbd>/</kbd></label></div>
     <div class="catalog-toolbar"><div class="filter-tabs" role="group" aria-label="项目分类"><button class="filter-tab active" data-filter="" aria-pressed="true">全部项目</button>${categories.map((category) => `<button class="filter-tab" data-filter="${e(category)}" aria-pressed="false">${e(category)}</button>`).join('')}</div><button class="sort-button" id="sort-projects">最近更新 ${icon('down', 13)}</button></div>
-    <div class="project-grid" id="project-grid">${projects.length ? [...projects].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)).map(projectCard).join('') : emptyState('这里还没有公开项目', '项目发布后，你可以在这里查看版本、获取安装包。', `<a class="btn btn-light" href="${url('login')}">${icon('key', 14)}管理员入口</a>`)}</div><p class="sr-only" id="search-result-count" aria-live="polite"></p></section>${footer()}</main>`;
+    <div class="project-grid" id="project-grid">${projects.length ? [...projects].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)).map(projectCard).join('') : emptyState('这里还没有公开项目', '项目发布后，你可以在这里查看版本、获取安装包。', `<a class="btn btn-light" style="display: none;" href="${url('login')}">${icon('key', 14)}管理员入口</a>`)}</div><p class="sr-only" id="search-result-count" aria-live="polite"></p></section>${footer()}</main>`;
 }
 
 function downloadRows(assets) {
